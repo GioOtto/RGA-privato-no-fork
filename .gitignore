@@ -1,0 +1,55 @@
+# Upstream shipped a .gitignore whose every rule was commented out, so
+# __pycache__/, .ipynb_checkpoints/ and a stray fastapi.cpython-38.pyc in the
+# repository root all ended up tracked. This one is not commented out.
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+pip-wheel-metadata/
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Test / type / lint caches
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Editors / OS / agent tooling
+.idea/
+.vscode/
+.claude/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Generated reports and local scratch
+reports/
+*.local.*
+scratch/
+
+# CatBoost training artefacts
+catboost_info/

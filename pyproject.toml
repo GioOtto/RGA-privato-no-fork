@@ -1,0 +1,94 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "safeaipackage-rgbox"
+version = "1.0.0"
+description = "Rank Graduation Box (S.A.F.E. AI) metrics with statistical inference - a hardened fork of safeaipackage"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+keywords = [
+    "rank graduation accuracy", "RGA", "RGE", "RGR", "SAFE AI",
+    "model validation", "model risk", "credit risk", "gini", "auroc",
+    "explainability", "fairness", "robustness",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
+]
+
+# numpy is the *only* hard requirement: rgbox.core and rgbox.inference are pure
+# NumPy. Upstream forced pandas + scikit-learn + XGBoost + CatBoost on anyone
+# who wanted to call rga(y, yhat) on two arrays.
+dependencies = ["numpy>=1.22"]
+
+[project.optional-dependencies]
+# Needed for the DataFrame-based workflows (RGE/RGR/fairness) and for the
+# legacy `safeaipackage` compatibility layer.
+pandas = ["pandas>=1.5"]
+sklearn = ["scikit-learn>=1.0"]
+plots = ["matplotlib>=3.5"]
+all = ["pandas>=1.5", "scikit-learn>=1.0", "matplotlib>=3.5", "scipy>=1.8"]
+dev = [
+    "pandas>=1.5",
+    "scikit-learn>=1.0",
+    "scipy>=1.8",
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/GolnooshBabaei/safeaipackage"
+Upstream = "https://github.com/GolnooshBabaei/safeaipackage"
+Paper = "https://doi.org/10.1016/j.eswa.2024.125239"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rgbox", "src/safeaipackage"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/", "tests/", "benchmarks/", "docs/", "examples/",
+    "README.md", "LICENSE", "NOTICE.md", "MIGRATION.md", "CHANGELOG.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+filterwarnings = [
+    "error::DeprecationWarning",
+    "ignore:This 'safeaipackage' is the rgbox fork:UserWarning",
+]
+markers = ["slow: long-running statistical simulations"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+src = ["src", "tests"]
+# upstream_reference/ is kept verbatim for diffing and is deliberately not
+# linted; the notebooks are upstream's too.
+extend-exclude = ["upstream_reference", "*.ipynb"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+# E501: long lines are almost all prose in docstrings.
+# RUF022: __all__ is grouped by theme on purpose - alphabetical would scatter
+#         the inference API across the accuracy and fairness entries.
+ignore = ["E501", "RUF022"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
