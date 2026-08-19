@@ -200,15 +200,29 @@ def resolve_columns(
     a MultiIndex frame is *that one column*, not the two columns ``"demo"`` and
     ``"gender"``. Pass a list to select several columns; a list is never a
     label, so it is never ambiguous.
+
+    A ``set`` is **rejected**. It reads like a natural way to spell "these
+    columns", but it has no order, and iteration order for strings varies with
+    ``PYTHONHASHSEED`` - so the same call in two processes returned RGE and
+    Shapley values in different orders. This package promises byte-identical
+    re-runs, which a set cannot deliver.
     """
+    if isinstance(columns, (set, frozenset)):
+        raise InputError(
+            f"{argument!r} was given as a set. Sets have no order, and Python "
+            "varies it between processes, so the results would not be "
+            "reproducible. Pass a list instead: "
+            f"{sorted(columns, key=repr)!r}."
+        )
+
     available = getattr(frame, "columns", None)
     # Column labels are hashable by construction, so this cannot raise.
     available_set = set(available) if available is not None else set()
 
-    # A list or set is always a group; it can never be a label. A tuple is a
-    # group only when it is not itself one of the frame's columns. Anything
-    # else - a string, a number, any scalar - is a lone label to be wrapped.
-    is_group = isinstance(columns, (list, set, frozenset)) or (
+    # A list is always a group; it can never be a label. A tuple is a group
+    # only when it is not itself one of the frame's columns. Anything else - a
+    # string, a number, any scalar - is a lone label to be wrapped.
+    is_group = isinstance(columns, list) or (
         isinstance(columns, tuple) and not _is_label(columns, available_set)
     )
     if not is_group:

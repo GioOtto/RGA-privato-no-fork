@@ -88,10 +88,22 @@ from typing import Any
 
 import numpy as np
 
-from ._validation import as_1d_float, as_score_pair, check_level
+from ._validation import (
+    as_1d_float,
+    as_group_labels,
+    as_score_pair,
+    check_level,
+    distinct_levels,
+)
 from .core import rga
 from .exceptions import InputError, InsufficientDataError, UndefinedMetricError
-from .inference import RGAEstimate, _normal_cdf, _normal_quantile, rga_ci
+from .inference import (
+    RGAEstimate,
+    _normal_cdf,
+    _normal_quantile,
+    bootstrap_values,
+    rga_ci,
+)
 from .predictors import resolve_columns
 
 __all__ = [
@@ -146,7 +158,8 @@ class ParityResult:
     attribute: Any = None
     pairwise: list[dict[str, Any]] = field(default_factory=list, repr=False)
     excluded: list[Any] = field(default_factory=list)
-    gap_bias_corrected: float | None = None
+    gap_excess_over_noise: float | None = None
+    gap_noise_floor: float | None = None
     gap_p_value_unadjusted: float | None = None
     multiplicity: str = ""
 
@@ -155,8 +168,12 @@ class ParityResult:
     #: sampling noise of each group's RGA still produces a positive maximum
     #: gap. Read ``gap_ci`` as "how large could the worst-case spread be", and
     #: use ``gap_p_value`` (or the signed intervals in ``pairwise``) to *test*
-    #: parity. ``gap_bias_corrected`` removes the selection bias by
-    #: subtracting the bootstrap mean excess.
+    #: parity.
+    #:
+    #: ``gap_noise_floor`` is what the gap would average under *exact* parity
+    #: given these group sizes, and ``gap_excess_over_noise`` is the observed
+    #: gap minus that floor. It can be negative, which means the observed
+    #: spread is no larger than sampling noise alone would produce.
     #:
     #: ``gap_p_value`` carries the *same* selection effect and is corrected for
     #: it: it is a max-T family-wise p-value, not the raw normal tail of the
@@ -168,7 +185,10 @@ class ParityResult:
         "gap_ci is a percentile interval for the non-negative statistic "
         "max(RGA) - min(RGA); it does not contain 0 even under exact parity. "
         "Test parity with gap_p_value, which is corrected by max-T for having "
-        "selected the widest of the pairs; gap_p_value_unadjusted is not."
+        "selected the widest of the pairs; gap_p_value_unadjusted is not. "
+        "gap_excess_over_noise is the gap minus gap_noise_floor, the spread "
+        "that exact parity would produce by itself at these group sizes; it "
+        "averages 0 under exact parity and may be negative."
     )
 
     def __float__(self) -> float:
@@ -205,7 +225,8 @@ class ParityResult:
             "gap_ci_low": None if self.gap_ci is None else self.gap_ci[0],
             "gap_ci_high": None if self.gap_ci is None else self.gap_ci[1],
             "gap_ci_note": self.GAP_CI_NOTE,
-            "gap_bias_corrected": self.gap_bias_corrected,
+            "gap_excess_over_noise": self.gap_excess_over_noise,
+            "gap_noise_floor": self.gap_noise_floor,
             "gap_p_value": self.gap_p_value,
             "gap_p_value_unadjusted": self.gap_p_value_unadjusted,
             "multiplicity": self.multiplicity,
@@ -219,16 +240,24 @@ class ParityResult:
         }
 
 
-def _group_masks(groups: np.ndarray) -> list[tuple[Any, np.ndarray]]:
-    levels = list(dict.fromkeys(groups.tolist()))
-    return [(level, groups == level) for level in levels]
-
-
-def _max_t_null(
+def _null_group_draws(
     standard_errors: np.ndarray,
     rng: np.random.Generator,
     n_draws: int,
 ) -> np.ndarray:
+    """Simulate the joint null ``H0: all RGAs equal``, one column per group.
+
+    Groups are disjoint samples, so under H0 the per-group estimates are
+    *independent* normals centred on the common value, with the standard errors
+    already computed. Centring them at zero loses nothing, because everything
+    downstream is a difference. One ``(n_draws, k)`` matrix therefore carries
+    the whole joint null and serves both the max-T p-value and the noise floor
+    of the gap - with no re-estimation of RGA and no resampling of the data.
+    """
+    return rng.normal(size=(n_draws, standard_errors.size)) * standard_errors
+
+
+def _max_t_null(standard_errors: np.ndarray, draws: np.ndarray) -> np.ndarray:
     """Null distribution of ``max`` over pairs of ``|z|``, for the max-T test.
 
     The headline gap is ``max - min`` over groups, so its z statistic is the
@@ -237,22 +266,59 @@ def _max_t_null(
     p-value does - rejects far too often: measured type I error under exact
     parity was 13.3% at three groups and 27.3% at five, against a nominal 5%.
 
-    Groups are disjoint samples, so under ``H0: all RGAs equal`` the per-group
-    estimates are *independent* normals with the standard errors already
-    computed. That makes the joint null of every pairwise statistic simulable
-    directly, with no re-estimation: draw one normal per group, form all pairs,
-    take the maximum. Because it uses the real correlation structure between
-    pairs that share a group, this is markedly less conservative than
-    Bonferroni while still controlling the family-wise error rate.
+    Given the joint null draws of :func:`_null_group_draws`, form every pair and
+    take the maximum. Because this uses the real correlation structure between
+    pairs that share a group, it is markedly less conservative than Bonferroni
+    while still controlling the family-wise error rate.
     """
     k = standard_errors.size
     pairs_i, pairs_j = np.triu_indices(k, k=1)
     denominator = np.hypot(standard_errors[pairs_i], standard_errors[pairs_j])
     # A degenerate pair contributes no evidence; keep it finite and harmless.
     denominator = np.where(denominator > 0, denominator, np.inf)
-    draws = rng.normal(size=(n_draws, k)) * standard_errors
     statistics = (draws[:, pairs_i] - draws[:, pairs_j]) / denominator
     return np.max(np.abs(statistics), axis=1)
+
+
+def _null_spread(draws: np.ndarray) -> np.ndarray:
+    """``max - min`` across groups under the joint null - the gap's noise floor.
+
+    ``max - min`` is non-negative by construction, so under *exact* parity its
+    expectation is strictly positive and grows with the number of groups and
+    with the per-group standard errors: measured at 0.034 for two groups of
+    300, 0.084 for five groups of 200. Subtracting this expectation from the
+    observed gap is what :attr:`ParityResult.gap_excess_over_noise` reports.
+    """
+    return draws.max(axis=1) - draws.min(axis=1)
+
+
+def _stratified_gap_draws(
+    y: np.ndarray,
+    yhat: np.ndarray,
+    masks: list[np.ndarray],
+    n_resamples: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Bootstrap distribution of ``max - min``, resampling inside each group.
+
+    Each group is resampled independently - which is what "stratified" means
+    here, and what keeps the very different group sizes honest - via the exact
+    vectorised multinomial bootstrap of :mod:`rgbox.inference`. Replicates in
+    which any group degenerates (a resample that turns out single-class) are
+    dropped as a whole, since a gap needs every group to have a value.
+    """
+    per_group = []
+    for mask in masks:
+        replicates = bootstrap_values(
+            y[mask], yhat[mask], n_resamples=n_resamples, random_state=rng
+        )
+        per_group.append(np.asarray(replicates, dtype=np.float64))
+    stacked = np.vstack(per_group)  # (k, n_resamples)
+    usable = np.all(np.isfinite(stacked), axis=0)
+    stacked = stacked[:, usable]
+    if stacked.shape[1] == 0:
+        return np.zeros(0, dtype=np.float64)
+    return stacked.max(axis=0) - stacked.min(axis=0)
 
 
 def labels_from_dummies(
@@ -330,7 +396,8 @@ def rga_parity(
     groups :
         Protected attribute, one label per row. Any number of levels is
         allowed; upstream documented "binary" but silently iterated over every
-        unique value and took ``max - min``.
+        unique value and took ``max - min``. **Missing labels are rejected**,
+        not dropped - see :func:`rgbox._validation.as_group_labels`.
     min_group_size :
         Levels smaller than this are still reported, with their own interval,
         but do not enter the headline gap. Set to 0 to include everything.
@@ -345,14 +412,7 @@ def rga_parity(
         very different group sizes.
     """
     y_arr, yhat_arr = as_score_pair(y, yhat)
-    group_values = np.asarray(groups)
-    if hasattr(groups, "to_numpy"):
-        group_values = groups.to_numpy()
-    group_values = np.asarray(group_values).ravel()
-    if group_values.size != y_arr.size:
-        raise InputError(
-            f"'groups' has {group_values.size} entries but y has {y_arr.size}."
-        )
+    group_values = as_group_labels(groups, "groups", y_arr.size)
     level = check_level(level)
 
     records: list[GroupRGA] = []
@@ -360,7 +420,7 @@ def rga_parity(
     eligible_masks: dict[Any, np.ndarray] = {}
     excluded: list[Any] = []
 
-    for label, mask in _group_masks(group_values):
+    for label, mask in distinct_levels(group_values):
         size = int(mask.sum())
         if size < 3:
             records.append(
@@ -439,11 +499,15 @@ def rga_parity(
     z_crit = _normal_quantile(1.0 - (1.0 - level) / 2.0)
     rng = np.random.default_rng(random_state)
 
-    # Family-wise correction for having picked the widest pair out of many.
+    # One simulation of the joint null serves two purposes: the family-wise
+    # correction for having picked the widest pair out of many, and the noise
+    # floor of the gap.
     group_ses = np.array(
         [eligible[label].standard_error for label in labels], dtype=np.float64
     )
-    max_t_draws = _max_t_null(group_ses, rng, n_resamples)
+    null_draws = _null_group_draws(group_ses, rng, n_resamples)
+    max_t_draws = _max_t_null(group_ses, null_draws)
+    gap_noise_floor = float(np.mean(_null_spread(null_draws)))
 
     def adjusted(statistic: float) -> float:
         return float(
@@ -475,32 +539,23 @@ def rga_parity(
             )
 
     # Stratified bootstrap for the max-min gap.
-    draws = np.empty(n_resamples)
-    n_valid = 0
-    for _ in range(n_resamples):
-        per_group = []
-        for label in labels:
-            mask = eligible_masks[label]
-            index = np.flatnonzero(mask)
-            picked = rng.choice(index, size=index.size, replace=True)
-            try:
-                per_group.append(rga(y_arr[picked], yhat_arr[picked]))
-            except UndefinedMetricError:
-                per_group = []
-                break
-        if per_group:
-            draws[n_valid] = max(per_group) - min(per_group)
-            n_valid += 1
-    if n_valid >= max(50, n_resamples // 2):
-        draws = draws[:n_valid]
+    draws = _stratified_gap_draws(
+        y_arr, yhat_arr, [eligible_masks[label] for label in labels], n_resamples, rng
+    )
+    if draws.size >= max(50, n_resamples // 2):
         alpha = 1.0 - level
         gap_ci = tuple(float(v) for v in np.quantile(draws, [alpha / 2, 1 - alpha / 2]))
-        # max - min over-states the true spread; the bootstrap mean measures by
-        # how much, so subtracting the excess de-biases the point estimate.
-        gap_bias_corrected = max(0.0, 2.0 * gap - float(draws.mean()))
     else:
         gap_ci = None
-        gap_bias_corrected = None
+
+    # How much of the observed spread is more than exact parity would produce
+    # by itself. Subtracting the *bootstrap* mean instead - which is what this
+    # did before - corrects nothing: the bootstrap resamples inside groups
+    # around the observed per-group values, so its world already contains the
+    # observed spread and its mean sits on top of the gap rather than above a
+    # true zero. Measured under exact parity, that removed only 24-37% of the
+    # bias and exceeded the raw gap more often than not when a real gap existed.
+    gap_excess_over_noise = gap - gap_noise_floor
 
     # The headline p-value is for the widest pair, which is the gap.
     widest = next(
@@ -521,7 +576,8 @@ def rga_parity(
         attribute=attribute,
         pairwise=pairwise,
         excluded=excluded,
-        gap_bias_corrected=gap_bias_corrected,
+        gap_excess_over_noise=gap_excess_over_noise,
+        gap_noise_floor=gap_noise_floor,
         gap_p_value_unadjusted=widest["p_value"],
         multiplicity=(f"max-T over {len(pairwise)} pair(s), {n_resamples} draws"),
     )
@@ -604,19 +660,13 @@ def rgf(
 
 
 def proxy_leakage(
-    X_train: Any,
-    X_test: Any,
-    model: Any,
+    X: Any,
     protected: Any,
     candidates: Sequence[Any] | None = None,
     *,
     yhat: Any = None,
-    method: str = "mean",
-    pos_label: Any = None,
-    greater_is_better: bool = True,
-    random_state: Any = None,
 ) -> dict[str, Any]:
-    """Rank the model's predictors by how strongly each proxies for ``protected``.
+    """Rank the predictors by how strongly each proxies for ``protected``.
 
     Dropping a protected attribute from the feature list does not remove its
     influence if a correlated predictor carries it - the standard proxy
@@ -626,33 +676,77 @@ def proxy_leakage(
     alone ranks the protected attribute. Values far from 0.5 in either
     direction indicate a proxy.
 
-    ``protected`` takes the same forms as in :func:`rgf`, including a **list**
-    of one-hot dummies. RGA needs an ordered target, and a multi-level
-    attribute has no order, so a group is scored one level at a time and each
-    candidate is reported against its **worst** level: a predictor that
-    reconstructs any single level is a proxy for the attribute. ``level`` names
-    the level that produced the reported figure. Direction does not matter -
-    ``leakage`` is ``|2·RGA - 1|``, so under a drop-first encoding a predictor
-    that identifies the omitted reference level scores just as high, from the
-    other side, on the dummies that are present.
+    Parameters
+    ----------
+    X :
+        The evaluation frame. Everything is measured on these columns; no
+        model is fitted and none is needed.
+    protected :
+        Column label, or a **list** of one-hot dummies, exactly as in
+        :func:`rgf`. RGA needs an ordered target and a multi-level attribute
+        has no order, so a group is scored one level at a time and each
+        candidate is reported against its **worst** level: a predictor that
+        reconstructs any single level is a proxy for the attribute. ``level``
+        names the level that produced the reported figure. Direction does not
+        matter - ``leakage`` is ``|2·RGA - 1|``, so under a drop-first encoding
+        a predictor that identifies the omitted reference level scores just as
+        high, from the other side, on the dummies that are present.
+    candidates :
+        Which columns to score. Defaults to every column of ``X`` except the
+        protected attribute's own dummies.
+    yhat :
+        Optional model scores on ``X``. When given, the result carries an extra
+        ``model_leakage`` entry measuring how well the *model's own output*
+        ranks the protected attribute - the question a reviewer asks
+        immediately after seeing which features proxy it.
 
-    The group's own dummies are excluded from the default candidate list.
+    Notes
+    -----
+    Until 1.0.1 the signature was
+    ``proxy_leakage(X_train, X_test, model, protected, ...)`` plus ``method``,
+    ``pos_label``, ``greater_is_better`` and ``random_state``, and **none of
+    those seven arguments was ever read**: passing a different model, a
+    different training frame or random noise as ``yhat`` returned a
+    bit-identical result. That is the same defect this fork documents as
+    upstream's headline bug, so the unused parameters are gone and ``yhat`` now
+    does something.
     """
-    protected_columns = resolve_columns(protected, X_test, "protected")
+    if hasattr(protected, "columns") or hasattr(protected, "dtypes"):
+        raise InputError(
+            "proxy_leakage's signature changed in 1.0.1: it is now "
+            "proxy_leakage(X, protected, candidates=None, *, yhat=None). The "
+            "old (X_train, X_test, model, protected) form accepted a training "
+            "frame and a model and then used neither. Pass the evaluation "
+            "frame and the protected attribute only."
+        )
+    protected_columns = resolve_columns(protected, X, "protected")
     protected_values = {
-        column: as_1d_float(X_test[column], f"X_test[{column!r}]")
-        for column in protected_columns
+        column: as_1d_float(X[column], f"X[{column!r}]") for column in protected_columns
     }
     excluded = set(protected_columns)
     columns = (
-        resolve_columns(candidates, X_test, "candidates")
+        resolve_columns(candidates, X, "candidates")
         if candidates is not None
-        else [c for c in X_test.columns if c not in excluded]
+        else [c for c in X.columns if c not in excluded]
     )
+
+    def worst_level(values: np.ndarray) -> tuple[Any, float, float] | None:
+        """The protected level this vector reconstructs best, and how well."""
+        worst: tuple[Any, float, float] | None = None
+        for level, target in protected_values.items():
+            try:
+                score = rga(target, values)
+            except UndefinedMetricError:
+                continue  # this level is constant here; the others may not be
+            leakage = abs(2 * score - 1)
+            if worst is None or leakage > worst[2]:
+                worst = (level, score, leakage)
+        return worst
+
     rows = []
     for column in columns:
         try:
-            values = as_1d_float(X_test[column], str(column))
+            values = as_1d_float(X[column], str(column))
         except InputError:
             rows.append(
                 {
@@ -663,15 +757,7 @@ def proxy_leakage(
                 }
             )
             continue
-        worst: tuple[Any, float, float] | None = None
-        for level, target in protected_values.items():
-            try:
-                score = rga(target, values)
-            except UndefinedMetricError:
-                continue  # this level is constant here; the others may not be
-            leakage = abs(2 * score - 1)
-            if worst is None or leakage > worst[2]:
-                worst = (level, score, leakage)
+        worst = worst_level(values)
         if worst is None:
             rows.append(
                 {
@@ -692,4 +778,31 @@ def proxy_leakage(
             }
         )
     rows.sort(key=lambda row: (row.get("leakage") is None, -(row.get("leakage") or 0)))
-    return {"protected": protected, "proxies": rows}
+
+    result: dict[str, Any] = {"protected": protected, "proxies": rows}
+    if yhat is not None:
+        scores = as_1d_float(yhat, "yhat")
+        if scores.size != len(X):
+            raise InputError(
+                f"'yhat' has {scores.size} entries but X has {len(X)} rows."
+            )
+        found = worst_level(scores)
+        result["model_leakage"] = (
+            {
+                "rga": None,
+                "level": None,
+                "leakage": None,
+                "note": "protected attribute is constant here",
+            }
+            if found is None
+            else {
+                "rga": found[1],
+                "level": found[0],
+                "leakage": found[2],
+                "note": (
+                    "how well the model's own score ranks the protected "
+                    "attribute; 0 means it carries none of it"
+                ),
+            }
+        )
+    return result

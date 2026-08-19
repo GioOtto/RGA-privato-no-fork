@@ -138,6 +138,77 @@ Upstream documented `TypeError` for non-DataFrame input and never raised it.
 
 ---
 
+## Changes *within* this fork (1.0.0 → 1.0.1)
+
+These are not upstream defects — they are defects this fork introduced, found
+by auditing it against itself. The full account is in the
+[changelog](CHANGELOG.md); these are the ones that change a call site.
+
+### `proxy_leakage` has a new signature
+
+**Was:** `proxy_leakage(X_train, X_test, model, protected, candidates=None, *,
+yhat=None, method=..., pos_label=..., greater_is_better=..., random_state=...)`
+— of which `X_train`, `model`, `yhat`, `method`, `pos_label`,
+`greater_is_better` and `random_state` were **never read**. Passing a junk
+training frame, a string instead of a model, and random noise as `yhat` gave a
+bit-identical result. (Yes: the same defect as §1 above, in this fork's own
+code.)
+
+**Now:** `proxy_leakage(X, protected, candidates=None, *, yhat=None)`, and
+`yhat` is used — supplying it adds a `model_leakage` entry saying how well the
+model's own score ranks the protected attribute.
+
+```python
+proxy_leakage(X_train, X_test, model, "gender")   # was
+proxy_leakage(X_test, "gender", yhat=scores)      # now
+```
+
+The old call shape raises with an explanation rather than silently binding a
+DataFrame to `protected`. `rgbox_report` no longer needs `X_train` to produce a
+proxy table.
+
+### Missing group / segment labels raise
+
+**Was:** a `NaN` label in `groups` or `segments` produced one "level" of size
+zero *per missing row* (`nan != nan`, so they never deduplicated), and those
+rows vanished from the analysis. A 2000-row report with 5% missing produced a
+102-row parity table and silently analysed 1900 rows.
+
+**Now:** `InputError`, naming the count. Filter the rows, or map them to an
+explicit level:
+
+```python
+groups = groups.fillna("missing")      # reported as its own level
+```
+
+### `ParityResult.gap_bias_corrected` is gone
+
+Replaced by `gap_excess_over_noise` (the gap minus what exact parity would
+produce at these group sizes) and `gap_noise_floor` (that quantity). The old
+field subtracted the *bootstrap* mean, which corrects nothing here — measured,
+it removed a quarter to a third of the bias and grew the gap more often than it
+shrank it. The new one averages 0 under exact parity, and can be negative.
+
+### `gap_ci` numbers move
+
+The stratified bootstrap behind it is now the exact vectorised multinomial one
+rather than a Python resampling loop, so the draws differ. `gap`,
+`gap_p_value` and every per-group figure are unchanged. It is also 2× faster.
+
+### A `set` of column names is rejected
+
+`rge(..., variables={"a", "b"})` and friends now raise. Set iteration order
+varies with `PYTHONHASHSEED`, so the same call returned results in different
+orders in different processes — against this package's byte-identical-re-runs
+promise. Pass a list.
+
+### `compute_rga_parity` is seeded
+
+The compatibility wrapper passes `random_state=0`, so its `gap_ci` and
+`gap_p_value` no longer drift between runs. The gap itself never did.
+
+---
+
 ## Things that did *not* change
 
 * `rga(y, yhat)` returns the same value to ~1e-16, on every input shape tested
@@ -189,6 +260,8 @@ everything else. The test suite exercises `XGBClassifier`, `XGBRegressor`,
 | `compute_rga_parity(...)` | `rga_parity(y, yhat, groups)` | per-group CIs, no model needed |
 | — | `rgf(...)` | the R code's fairness measure, absent from the Python package |
 | — | `proxy_leakage(...)` | which predictors proxy the protected attribute |
+| — | `outcome_parity(...)` | demographic parity, equal opportunity, equalised odds, disparate impact — with intervals and a multiplicity correction |
+| — | `worst_cohort(...)` | finds the slice the model is worst on, with a search-aware p-value |
 | — | `accuracy_report(...)` | RGA beside AUROC/Spearman/RMSE, with intervals |
 | — | `rga_by_segment(...)` | per-portfolio performance with reliability flags |
 | — | `rgbox_report(...)` | the whole box as JSON / Markdown / HTML |

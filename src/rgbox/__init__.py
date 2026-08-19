@@ -23,6 +23,10 @@ Everything else hangs off that one measure:
 * :func:`rge` / :func:`rge_shapley` - predictor importance;
 * :func:`rgr_curve` - robustness with no free hyperparameter;
 * :func:`rga_parity` - ranking quality across protected groups;
+* :func:`outcome_parity` - demographic parity, equal opportunity, equalised
+  odds and disparate impact, with intervals and a multiplicity correction;
+* :func:`worst_cohort` - searches for the slice the model is worst on, instead
+  of asking you to name it;
 * :func:`rgbox_report` - the whole box as one serialisable artefact.
 
 This code was written by an AI system. See the README before adopting it.
@@ -41,6 +45,7 @@ from .accuracy import (
     rga_by_segment,
     rga_ovr,
 )
+from .cohorts import Cohort, CohortSearch, worst_cohort
 from .core import RGACurves, gini_score, rga, rga_curves, rga_score
 from .exceptions import (
     InputError,
@@ -67,6 +72,12 @@ from .inference import (
     rga_ci,
     rga_compare,
     rga_test,
+)
+from .outcomes import (
+    CriterionResult,
+    GroupRate,
+    OutcomeParityResult,
+    outcome_parity,
 )
 from .predictors import as_score_function, predict_scores
 from .report import RGBoxReport, rgbox_report
@@ -115,6 +126,15 @@ __all__ = [
     "labels_from_dummies",
     "ParityResult",
     "GroupRGA",
+    # fairness - outcome-based criteria
+    "outcome_parity",
+    "OutcomeParityResult",
+    "CriterionResult",
+    "GroupRate",
+    # cohort search
+    "worst_cohort",
+    "CohortSearch",
+    "Cohort",
     # plumbing
     "predict_scores",
     "as_score_function",

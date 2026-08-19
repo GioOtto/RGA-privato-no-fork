@@ -116,3 +116,15 @@ def test_a_list_is_never_read_as_a_label():
 def test_empty_selection_is_reported_before_the_missing_labels_check(rng):
     with pytest.raises(InputError, match="is empty"):
         resolve_columns([], rng.normal(size=(3, 2)), "variables")
+
+
+def test_a_set_is_rejected_because_its_order_is_not_reproducible():
+    """PYTHONHASHSEED changed the column order, and with it the output order."""
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame({"a": [1.0], "b": [2.0], "c": [3.0]})
+    with pytest.raises(InputError, match="given as a set"):
+        resolve_columns({"a", "b"}, frame, "variables")
+    with pytest.raises(InputError, match="given as a set"):
+        resolve_columns(frozenset({"a", "b"}), frame, "variables")
+    # The message tells the caller exactly what to pass instead.
+    assert resolve_columns(["a", "b"], frame, "variables") == ["a", "b"]

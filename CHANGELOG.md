@@ -6,6 +6,164 @@ Versioning restarts at 1.0.0 for the fork; upstream's last release was 0.8.3
 
 ## [Unreleased]
 
+### Added
+
+- **`outcome_parity`** — demographic parity, disparate impact, equal
+  opportunity, predictive equality and equalised odds, each with per-group
+  Wilson intervals, a gap interval, and a **max-T family-wise p-value**. This
+  closes a gap the package had itself declared: `fairness.py` said "report it
+  alongside outcome-based criteria, never instead of them" and then offered no
+  way to do so. Everything is closed-form — no resampling, no SciPy, no pandas.
+  Against Fairlearn (which has had bootstrap intervals since 0.11) the two
+  differences are that the intervals are analytic, hence free and
+  deterministic, and that the headline p-value is corrected for having selected
+  the widest of `k(k−1)/2` pairs.
+  - **There is no default threshold, deliberately.** Every one of these
+    criteria is defined on a decision rather than a score, and the rest of the
+    package is threshold-free by design. Pass `decisions` already at 0/1, or
+    pass scores with an explicit `threshold=`; passing scores without one
+    raises. A fairness figure computed at a cut-off nobody chose is worse than
+    no figure, because it looks authoritative.
+  - `equalized_odds` is the larger of the TPR and FPR gaps; `disparate_impact`
+    is the min/max selection-rate ratio with a log-scale interval and a
+    `four_fifths_rule_met` flag.
+- **`worst_cohort`** — searches for the slice the model ranks worst on, instead
+  of requiring you to name it first (`rga_by_segment` presumes you already know
+  where to look). Exhaustive over single bin conditions and their pairwise
+  intersections, so there is no search heuristic to tune.
+  - The selection effect here is far larger than the one `rga_parity` faced —
+    thousands of cohorts rather than ten pairs — so a **permutation p-value**
+    accounts for the whole search. What is permuted matters: the *cohort
+    definitions* are permuted against the (target, score) pairs, which keeps
+    every cohort size, every overlap and the overall RGA intact and tests
+    homogeneity. Permuting the score instead would test "the model has no
+    signal at all", drive every cohort to 0.5 and leave the test with no power
+    against exactly the case it exists for.
+  - Documented, with the measured example: slicing on a predictor the model
+    **uses** depresses RGA inside every slice by range restriction alone, and
+    the test correctly reports that as heterogeneity. Prefer slicing on
+    variables the model never saw.
+- `proxy_leakage` gained a `model_leakage` entry when `yhat` is supplied: how
+  well the model's *own score* ranks the protected attribute, which is the
+  question a reviewer asks straight after seeing which features proxy it. The
+  generated report now renders the proxy table, which it previously computed
+  and discarded.
+- `rgbox._ranks.SortedIndex` — one sort, shared by every aggregate built on it.
+
+### Fixed
+
+- **`rga_parity` and `rga_by_segment` invented one empty group per missing
+  label, and silently dropped those rows.** `dict.fromkeys(labels.tolist())`
+  rebuilds a fresh `float` object per element and `nan != nan`, so NaN labels
+  never deduplicated; `labels == nan` was then all-False, giving each one
+  `n = 0`. A 2000-row report with 5% missing produced a **102-row** parity
+  table, 100 rows of it `nan | 0`, and analysed 1900 rows without a warning.
+  Missing labels (`None`, NaN, `pandas.NA`, `NaT`) are now **rejected** with a
+  message naming the count, consistent with the package's NaN policy
+  everywhere else. Encode missing as an explicit level if it should be
+  reported. Object-dtype `None` labels and unused `Categorical` categories
+  were unaffected and still are.
+- **`gap_bias_corrected` did not remove the bias it claimed to**, and is
+  replaced by `gap_excess_over_noise` plus `gap_noise_floor`. The old formula
+  subtracted the *bootstrap* mean excess, but the stratified bootstrap
+  resamples inside each group around the observed per-group RGAs, so its world
+  already contains the observed spread and its mean sits on top of the gap
+  rather than above a true zero. Measured under exact parity it removed only
+  24% (k=2), 32% (k=3) and 37% (k=5) of the selection bias; with a real gap
+  present it came out **larger** than the raw gap in 83 runs out of 150. The
+  replacement subtracts the expectation of `max − min` under the null of exact
+  parity, simulated from the same independent normals the max-T p-value
+  already uses — so it costs nothing, it averages 0 under exact parity (now a
+  regression test), and it may be negative, which means the observed spread is
+  no larger than noise alone would produce.
+- **`proxy_leakage` accepted seven arguments and read none of them.**
+  `X_train`, `model`, `yhat`, `method`, `pos_label`, `greater_is_better` and
+  `random_state` never appeared in the body: passing a junk training frame, the
+  *string* `"not a model at all"` as `model` and random noise as `yhat`
+  returned a bit-identical result. That is verbatim the upstream defect this
+  fork leads its migration notes with. The signature is now
+  `proxy_leakage(X, protected, candidates=None, *, yhat=None)`, `yhat` does
+  something, and the old call shape raises with an explanation instead of
+  binding a frame to `protected`.
+- **`compute_rga_parity` (compatibility layer) was unseeded**, so `gap_ci` and
+  `gap_p_value` drifted between two runs on identical data — measured
+  `(0.00170, 0.11277)` against `(0.00164, 0.11600)` and p-values 0.7046 against
+  0.7136. It now passes `random_state=0`. The gap itself was always
+  deterministic.
+- **A pandas nullable column with missing values reported the wrong problem.**
+  `Int64`/`Float64`/`boolean`/`string` with `pandas.NA` arrives as an object
+  array, so the float conversion failed and the error read "has non-numeric
+  dtype … encode categories to numbers first". The package already had a good
+  message for missing values; it just was not reachable. It is now.
+- **`resolve_columns` accepted a `set`, whose iteration order is not stable
+  across processes.** `rge_shapley(..., {"a","b","c","d"})` returned its values
+  in four different orders under `PYTHONHASHSEED` 0/1/2/3, against a package
+  whose headline claim is byte-identical re-runs. Sets are now rejected, with
+  the sorted list to pass instead named in the message.
+- **The maths in `README.md` and `docs/THEORY.md` did not render on GitHub**,
+  in two independent ways, both verified against GitHub's own renderer
+  (`POST /markdown`, `mode=gfm`, which returns the payload MathJax receives).
+  All 28 formulas now come back intact.
+  - `\operatorname` is not on GitHub's MathJax allow-list, so those blocks
+    displayed "The following macros are not allowed: operatorname" instead of a
+    formula — including the central `RGA = ½ + cov(y,R(ŷ)) / 2cov(y,R(y))`
+    identity on the README's front page. Nine occurrences, replaced by
+    `\mathrm` with an explicit `\,` where the operator used to supply the
+    spacing itself.
+  - The larger half: GitHub runs its Markdown pass **before** the maths pass,
+    and that pass strips any backslash preceding a non-letter — inside maths as
+    much as outside, because `\,` is a legal CommonMark escape. `THEORY.md` had
+    **57** such sequences on 22 lines (18 `\,`, 16 `\;`, 8 `\{`, 8 `\}`, 4
+    `\!`, 2 `\_`, 1 `\ `), so `\mathbb 1\{Z \ge z_0\}` lost its set braces and
+    `\texttt{income\_copy}` acquired a subscript. It was invisible wherever
+    `\operatorname` was present, because the banner replaced the whole block —
+    fixing the macro alone would have exposed it. Display maths now uses
+    ```` ```math ```` fences and fragile inline maths uses `` $`…`$ ``, whose
+    contents are code to the Markdown pass.
+  - One inline `$…$` region spanned a line break (`THEORY.md` 346–347), which
+    GitHub does not recognise as maths at all; it rendered as literal LaTeX
+    source. Rewrapped.
+  - `tests/test_docs_math.py` now enforces all of this, so it cannot regress.
+- **The exact jackknife performed six sorts, not the two `docs/THEORY.md` §2.2
+  derives.** `average_ranks`, `suffix_sums_strictly_greater` and
+  `tie_group_sums` each re-sorted the same array, and `_leave_one_out_sums`
+  called all three, twice over. A shared `SortedIndex` brings
+  `jackknife_values` and `influence_values` to 2 sorts and `rga_ci` to 4 (from
+  8). `bootstrap_values` also re-sorted once per block and now hoists it. The
+  sort count is asserted by a test rather than left to drift.
+
+### Changed — behaviour changes, numbers move
+
+- `rga_parity`'s stratified bootstrap for `gap_ci` now runs through the exact
+  vectorised multinomial bootstrap instead of a Python loop over
+  `n_resamples × k` calls to `rga`. **The draws differ, so `gap_ci` moves**
+  (it is a percentile interval of a resampling distribution; the estimate,
+  the gap and the p-value are unchanged). Measured wall time at the defaults:
+  4.62 s → 2.08 s for five groups of 1000.
+- `ParityResult.gap_bias_corrected` is **gone**, replaced by
+  `gap_excess_over_noise` and `gap_noise_floor` — see *Fixed*. The report
+  prints the new pair with its interpretation.
+- `proxy_leakage`'s signature changed — see *Fixed*. `rgbox_report` no longer
+  needs `X_train` to produce a proxy table.
+- Missing group/segment labels now raise instead of being silently dropped —
+  see *Fixed*.
+- A `set` passed as `variables`/`protected`/`features` now raises — see
+  *Fixed*.
+
+### Documented — properties that were stated wrongly
+
+- **RGR and AURGR live on `[0, 1]`, not `[0.5, 1]`.** The module claimed 0.5 as
+  the floor and "collapses immediately scores near 0.5". A tail swap at
+  `magnitude = 0.5` exchanges every value with its mirror, i.e. **reverses the
+  column outright** (measured rank correlation with the original: +0.02 at
+  0.10, −0.58 at 0.25, −1.00 at 0.50), so a model monotone in that feature
+  scores `RGR = 0` at the top of the default grid and `AURGR = 0.217`. Below
+  0.5 means the perturbation *inverted* the ranking, which is information, not
+  a floor violation. The grid is unchanged — it spans the perturbation's whole
+  legal domain, which is what makes AURGR free of a hyperparameter — but the
+  scale is now described correctly and AURGR should be compared across
+  variables and model versions, not against an absolute 0.5.
+
 ### Changed — three behaviour changes, numbers move
 
 - **`rga_parity(...).gap_p_value` is now family-wise corrected.** The gap is

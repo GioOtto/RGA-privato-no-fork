@@ -2,10 +2,22 @@
 
     python benchmarks/bench.py
 
-Answers two questions: is the closed form actually faster than the upstream
-pandas pipeline, and is the inference layer cheap enough to run by default in a
-validation pipeline. (Spoiler for the second: yes, which is why there is no C
-extension in this package.)
+Answers three questions: is the closed form actually faster than the upstream
+pandas pipeline, is the inference layer cheap enough to run by default in a
+validation pipeline, and would a compiled extension be worth it.
+
+The third is the one people keep asking, so the last section measures it rather
+than asserting it. The answer is no, and the reason is in the numbers: `rga` is
+two sorts and two dot products, and the sorts are **~60% of the total**. Even
+an infinitely fast sort therefore caps the achievable speedup at about 2.4x,
+against the cost of losing the universal pure-Python wheel and moving to
+cibuildwheel across three operating systems and five Python versions.
+
+What *did* pay, and in pure NumPy: sharing one sort between the aggregates that
+need it. The exact jackknife used to perform six sorts where `docs/THEORY.md`
+2.2 derives two, and the bootstrap re-sorted once per block. Fixing that made
+the whole inference layer 3.5-4x faster - more than a Rust rewrite of the sort
+could have delivered, with no build to audit.
 """
 
 from __future__ import annotations
@@ -130,6 +142,53 @@ def main() -> int:
             for m in ("jackknife", "influence", "bootstrap")
         ]
         print(f"  {label:<22}" + "".join(f"{e:>11.5f}" for e in errors))
+
+    print()
+    print("=" * 78)
+    print("would a compiled extension help? where the time actually goes")
+    print("=" * 78)
+    print(f"{'n':>10} {'2x argsort':>12} {'rga total':>11} {'sort share':>11} "
+          f"{'ceiling if the sort were free':>31}")
+    for n in SIZES:
+        y = rng.normal(size=n)
+        yhat = 0.6 * y + rng.normal(size=n)
+
+        def two_sorts(a=y, b=yhat):
+            np.argsort(a, kind="stable")
+            np.argsort(b, kind="stable")
+
+        sort_ms = timeit(two_sorts)
+        total_ms = timeit(rga, y, yhat)
+        share = sort_ms / total_ms
+        print(f"{n:>10,} {sort_ms:>11.2f}m {total_ms:>10.2f}m {share:>10.0%} "
+              f"{1 / max(1 - share, 1e-9):>30.1f}x")
+    print()
+    print("  A Rust/PyO3 sort is perhaps 2-3x faster than NumPy's, not infinite,")
+    print("  so the realistic gain is well under 2x - against losing the pure-Python")
+    print("  wheel. Sharing one sort between aggregates gave more, for free:")
+    print()
+    print(f"  {'operation':<26}{'argsort calls':>15}{'was':>8}")
+    for label, fn in (
+        ("rga", lambda y, z: rga(y, z)),
+        ("jackknife_values", jackknife_values),
+        ("influence_values", influence_values),
+    ):
+        counter = {"n": 0}
+        real = np.argsort
+
+        def counting(*args, **kwargs):
+            counter["n"] += 1
+            return real(*args, **kwargs)
+
+        import rgbox._ranks as ranks_module
+
+        ranks_module.np.argsort = counting
+        try:
+            fn(rng.normal(size=1000), rng.normal(size=1000))
+        finally:
+            ranks_module.np.argsort = real
+        was = {"rga": 2, "jackknife_values": 6, "influence_values": 6}[label]
+        print(f"  {label:<26}{counter['n']:>15}{was:>8}")
     return 0
 
 

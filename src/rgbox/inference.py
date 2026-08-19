@@ -59,10 +59,12 @@ from typing import Any, Literal
 import numpy as np
 
 from ._ranks import (
+    SortedIndex,
     average_ranks,
-    suffix_sums_strictly_greater,
-    tie_group_ids,
-    tie_group_sums,
+    average_ranks_from,
+    sorted_index,
+    suffix_sums_strictly_greater_from,
+    tie_group_sums_from,
 )
 from ._validation import as_score_pair, check_level
 from .core import rga
@@ -159,13 +161,15 @@ def _leave_one_out_sums(values: np.ndarray, payload: np.ndarray) -> np.ndarray:
     ``S(k) = Psi - payload_k R(k) - T(k) - (U(k) - payload_k) / 2``
 
     with ``Psi`` the full inner product, ``T`` the payload mass strictly above
-    and ``U`` the payload mass tied. All three are suffix/segment sums over one
-    sort: ``O(n log n)`` for the whole family.
+    and ``U`` the payload mass tied. All three are suffix/segment sums over
+    **one** sort - hence the single :func:`sorted_index` shared between them -
+    so the whole delete-one family costs ``O(n log n)``.
     """
-    ranks = average_ranks(values)
+    index = sorted_index(values)
+    ranks = average_ranks_from(index)
     total = float(payload @ ranks)
-    above = suffix_sums_strictly_greater(values, payload)
-    tied = tie_group_sums(values, payload)
+    above = suffix_sums_strictly_greater_from(index, payload)
+    tied = tie_group_sums_from(index, payload)
     return total - payload * ranks - above - 0.5 * (tied - payload)
 
 
@@ -198,14 +202,18 @@ def influence_values(y: np.ndarray, yhat: np.ndarray) -> np.ndarray:
     worse. The tail term is centred the same way.
     """
     n = y.size
-    cdf_y = (average_ranks(y) - 0.5) / n
-    cdf_z = (average_ranks(yhat) - 0.5) / n
+    # One sort per argument, shared by the rank and the tail-mass aggregates.
+    index_y = sorted_index(y)
+    index_z = sorted_index(yhat)
+    cdf_y = (average_ranks_from(index_y) - 0.5) / n
+    cdf_z = (average_ranks_from(index_z) - 0.5) / n
     mean_y = float(y.mean())
 
     # E[Y 1{V > v_i}] + E[Y 1{V = v_i}] / 2, matching the mid-CDF convention.
-    def upper_tail_mean(values: np.ndarray) -> np.ndarray:
+    def upper_tail_mean(index) -> np.ndarray:
         return (
-            suffix_sums_strictly_greater(values, y) + 0.5 * tie_group_sums(values, y)
+            suffix_sums_strictly_greater_from(index, y)
+            + 0.5 * tie_group_sums_from(index, y)
         ) / n
 
     psi = float(np.mean(y * cdf_z))
@@ -215,39 +223,40 @@ def influence_values(y: np.ndarray, yhat: np.ndarray) -> np.ndarray:
     if abs(big_d) < 1e-300:
         raise UndefinedMetricError("degenerate target: RGA denominator is zero.")
 
-    if_n = y * cdf_z + upper_tail_mean(yhat) - 2 * psi - (y - mean_y) / 2
-    if_d = y * cdf_y + upper_tail_mean(y) - 2 * phi - (y - mean_y) / 2
+    if_n = y * cdf_z + upper_tail_mean(index_z) - 2 * psi - (y - mean_y) / 2
+    if_d = y * cdf_y + upper_tail_mean(index_y) - 2 * phi - (y - mean_y) / 2
     return if_n / (2 * big_d) - big_n * if_d / (2 * big_d * big_d)
 
 
 def _multinomial_rga(
     y: np.ndarray,
-    yhat: np.ndarray,
     counts: np.ndarray,
+    index_z: SortedIndex,
+    index_y: SortedIndex,
 ) -> np.ndarray:
     """Weighted RGA for a whole ``(B, n)`` block of bootstrap weights at once.
 
     The sort order of ``y`` and of ``yhat`` does not depend on the replicate,
-    so it is computed once; only the tie-group weight sums change, and those
-    are a single ``reduceat`` per block.
+    so both are computed once by the caller and reused for every block; only
+    the tie-group weight sums change, and those are a single ``reduceat`` per
+    block.
     """
     totals = counts.sum(axis=1, keepdims=True)
     means = (counts @ y)[:, None] / totals
 
-    def weighted_term(values: np.ndarray) -> np.ndarray:
-        order = np.argsort(values, kind="stable")
-        gid = tie_group_ids(values[order])
+    def weighted_term(index: SortedIndex) -> np.ndarray:
+        gid = index.gid
         starts = np.flatnonzero(np.concatenate(([True], np.diff(gid) != 0)))
-        sorted_counts = counts[:, order]  # (B, n)
+        sorted_counts = counts[:, index.order]  # (B, n)
         group_weight = np.add.reduceat(sorted_counts, starts, axis=1)
         before = np.cumsum(group_weight, axis=1) - group_weight
         group_rank = before + (group_weight + 1.0) / 2.0
         ranks = group_rank[:, gid]  # (B, n)
-        centred = sorted_counts * (y[order][None, :] - means)
+        centred = sorted_counts * (y[index.order][None, :] - means)
         return np.einsum("bn,bn->b", centred, ranks)
 
-    numerator = weighted_term(yhat)
-    denominator = weighted_term(y)
+    numerator = weighted_term(index_z)
+    denominator = weighted_term(index_y)
     with np.errstate(divide="ignore", invalid="ignore"):
         return 0.5 + numerator / (2.0 * denominator)
 
@@ -281,13 +290,21 @@ def bootstrap_values(
         np.empty(n_resamples, dtype=np.float64) if paired_with is not None else None
     )
 
+    # Sort orders do not depend on the replicate, so they are hoisted out of
+    # the block loop rather than recomputed for every block.
+    index_y = sorted_index(y)
+    index_a = sorted_index(yhat)
+    index_b = sorted_index(paired_with) if paired_with is not None else None
+
     done = 0
     while done < n_resamples:
         take = min(block_size, n_resamples - done)
         counts = rng.multinomial(n, probabilities, size=take).astype(np.float64)
-        primary[done : done + take] = _multinomial_rga(y, yhat, counts)
+        primary[done : done + take] = _multinomial_rga(y, counts, index_a, index_y)
         if secondary is not None:
-            secondary[done : done + take] = _multinomial_rga(y, paired_with, counts)
+            secondary[done : done + take] = _multinomial_rga(
+                y, counts, index_b, index_y
+            )
         done += take
 
     if secondary is not None:

@@ -287,3 +287,40 @@ def test_results_serialise(fitted_logit):
     record = curve.to_dict()
     assert set(record) >= {"label", "magnitudes", "rgr", "aurgr", "kind"}
     assert isinstance(record["magnitudes"], list)
+
+
+def test_rgr_reaches_zero_because_a_full_tailswap_reverses_the_column(rng):
+    """The documented scale is [0, 1], not [0.5, 1].
+
+    A tail swap at magnitude 0.5 exchanges every value with its mirror, i.e.
+    reverses the column outright, so a model monotone in that feature scores
+    RGR = 0 - not 0.5. The module used to document 0.5 as the floor.
+    """
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame({"a": rng.normal(size=400), "b": rng.normal(size=400)})
+    only_a = lambda X: np.asarray(X)[:, 0]  # noqa: E731 - the score *is* column a
+
+    values = {
+        magnitude: rgr(frame, only_a, ["a"], magnitude=magnitude)[0].rgr
+        for magnitude in (0.05, 0.2, 0.5)
+    }
+    assert values[0.05] > values[0.2] > values[0.5]
+    assert values[0.5] == pytest.approx(0.0, abs=1e-12)
+    assert values[0.2] < 0.5
+
+
+def test_a_full_tailswap_is_an_exact_reversal():
+    pd = pytest.importorskip("pandas")
+    column = np.arange(10.0)
+    swapped = perturb(pd.DataFrame({"x": column}), "x", 0.5)["x"].to_numpy()
+    assert np.array_equal(swapped, column[::-1])
+
+
+def test_aurgr_may_fall_below_one_half(rng):
+    """AURGR averages over the whole legal domain, reversal included."""
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame({"a": rng.normal(size=400), "b": rng.normal(size=400)})
+    only_a = lambda X: np.asarray(X)[:, 0]  # noqa: E731
+    curve = rgr_curve(frame, only_a, ["a"])[0]
+    assert 0.0 <= curve.aurgr < 0.5
+    assert curve.values.min() == pytest.approx(0.0, abs=1e-12)

@@ -33,7 +33,7 @@ you to guess.
 > the scope and reviewed the output; a human did not type the code.
 >
 > The mathematics was derived and then **checked numerically** rather than
-> asserted: 248 tests, agreement with the original implementation to ~1e-16,
+> asserted: 354 tests, agreement with the original implementation to ~1e-16,
 > agreement of the analytic standard error with DeLong's estimator to 0.3%,
 > and confidence-interval coverage measured by simulation. What is verified is
 > stated as verified; what is not is listed in
@@ -53,7 +53,7 @@ you to guess.
 > risultato; non lo ha scritto a mano.
 >
 > La matematica è stata derivata e poi **verificata numericamente**, non
-> asserita: 248 test, accordo con l'implementazione originale a ~1e-16, accordo
+> asserita: 354 test, accordo con l'implementazione originale a ~1e-16, accordo
 > dello standard error analitico con lo stimatore di DeLong allo 0.3%, e
 > copertura degli intervalli di confidenza misurata per simulazione. Ciò che è
 > verificato è dichiarato come tale; ciò che non lo è sta in
@@ -159,7 +159,9 @@ Not bugs, but they invalidate the natural reading of the numbers:
 Expanding the published definition, the `(n+1)·Σy` terms cancel and RGA
 collapses to a ratio of covariances-with-ranks:
 
-$$\mathrm{RGA} = \frac12 + \frac{\operatorname{cov}(y, R(\hat y))}{2\operatorname{cov}(y, R(y))}$$
+```math
+\mathrm{RGA} = \frac12 + \frac{\mathrm{cov}\big(y, R(\hat y)\big)}{2\,\mathrm{cov}\big(y, R(y)\big)}
+```
 
 i.e. `RGA = (1 + γ)/2` where γ is the **Schechtman–Yitzhaki Gini correlation**.
 This is algebra, not approximation — the test suite asserts agreement with the
@@ -264,7 +266,7 @@ from rgbox import rga_parity, rgf, proxy_leakage
 
 parity = rga_parity(y, scores, groups)   # per-group RGA + CIs, gap + CI + p-value
 rgf(X_train, X_test, model, "gender")    # the R code's definition
-proxy_leakage(X_train, X_test, model, "gender")   # which features proxy it
+proxy_leakage(X_test, "gender", yhat=scores)      # which features proxy it
 
 # A one-hot encoded attribute: pass the dummies as a list, and it is treated
 # as one attribute everywhere — removed as a unit, scored level by level.
@@ -274,6 +276,13 @@ rgf(X_train, X_test, model, ["region_centre", "region_south"])
 Multi-level attributes, a `min_group_size` floor so a 12-row segment can't drive
 the headline, and an explicit note that `max−min` is non-negative by
 construction so its interval never contains 0 — test parity with the p-value.
+
+`gap_noise_floor` says what `max−min` would average under *exact* parity at
+these group sizes, and `gap_excess_over_noise` is the gap net of it. It averages
+0 under exact parity and can be negative, which reads as "no more spread than
+noise alone produces". (It replaces a `gap_bias_corrected` that subtracted the
+*bootstrap* mean instead — see the changelog for why that removed only a quarter
+to a third of the bias, and grew the gap more often than it shrank it.)
 
 **The gap's p-value is corrected for multiplicity.** `max−min` selects the
 widest of `k(k−1)/2` pairs, so referring it to a normal — which is what every
@@ -313,6 +322,61 @@ table compares levels rather than each dummy's 0/1. A tuple is read as a single
 demographic parity, not equalised odds, and implies neither. That sentence is
 printed in the generated report, not just here.
 
+### Outcome-based fairness
+
+Because the sentence above ends "report it alongside outcome-based criteria,
+never instead of them", and until 1.0.1 there was no way to do so:
+
+```python
+from rgbox import outcome_parity
+
+result = outcome_parity(y, scores, groups, threshold=0.5)
+result["demographic_parity"].gap        # + CI, + family-wise p-value
+result["equal_opportunity"].gap         # TPR parity
+result["predictive_equality"].gap       # FPR parity
+result.equalized_odds                   # the worse of the two
+result.disparate_impact                 # min/max selection rate, + four-fifths flag
+```
+
+Per-group **Wilson** intervals, a normal interval for each gap, a log-scale
+interval for the disparate-impact ratio — all closed form, so they cost nothing
+and are deterministic. Fairlearn has had bootstrap intervals for these since
+0.11; what is not in it is that the headline p-value carries the **same max-T
+correction** as `rga_parity`, because `max−min` over `k` groups selects the
+widest of `k(k−1)/2` pairs here exactly as it does there.
+
+**There is no default threshold, deliberately.** Every one of these criteria is
+defined on a decision, not a score, and the rest of this package is
+threshold-free by design. Pass decisions at 0/1, or pass scores with an explicit
+`threshold=`; passing scores without one raises. A fairness number computed at a
+cut-off nobody chose is worse than no number, because it looks authoritative.
+
+### Finding the bad cohort instead of guessing it
+
+`rga_by_segment` asks "how does the model do on *these* slices", which presumes
+you already know where to look. The failure mode of monitoring is the slice
+nobody thought to cut:
+
+```python
+from rgbox import worst_cohort
+
+search = worst_cohort(y, scores, X_test, features=["region", "channel", "vintage"])
+search.cohorts[0].label     # "region == 'south' AND channel == 'online'"
+search.p_value              # accounts for having searched every cohort
+```
+
+Exhaustive over single bin conditions and their pairwise intersections, so there
+is no heuristic to tune. The selection effect is much larger than the parity
+table's — thousands of cohorts, not ten pairs — so the p-value comes from
+permuting the **cohort definitions** against the (target, score) pairs, which
+keeps every cohort size and the overall RGA intact and tests homogeneity.
+Permuting the *score* instead would test "the model has no signal at all", drive
+every cohort to 0.5 and leave the test powerless against the case it exists for.
+
+One documented caveat: slicing on a predictor the model **uses** lowers RGA
+inside every slice by range restriction alone, and the test correctly reports
+that as heterogeneity. Slice on variables the model never saw for a clean read.
+
 ### The report
 
 ```python
@@ -342,15 +406,36 @@ One core, pure NumPy, no compiled extension:
 
 | n | `rga` | vs upstream | jackknife CI | bootstrap B=200 |
 |---|---|---|---|---|
-| 1 000 | 0.13 ms | **73× faster** | 0.33 ms | 21 ms |
-| 10 000 | 1.2 ms | 4.3× | 5.2 ms | 302 ms |
-| 100 000 | 19 ms | 2.2× | 78 ms | 3.4 s |
-| 1 000 000 | 279 ms | 2.4× | — | — |
+| 1 000 | 0.15 ms | 23× faster | 0.20 ms | 20 ms |
+| 10 000 | 1.4 ms | 6.0× | 1.9 ms | 243 ms |
+| 100 000 | 22 ms | 3.5× | 28 ms | 2.7 s |
+| 1 000 000 | 311 ms | 3.5× | — | — |
 
-A C extension was considered and rejected: two sorts and two dot products leave
-nothing worth the build-and-audit burden, and the default inference method is
-`O(n log n)` precisely so resampling is optional. `python benchmarks/bench.py`
-reproduces the table.
+Measured on one machine; the speedup against upstream at small `n` is dominated
+by pandas' fixed overhead and so varies a lot with machine and pandas version.
+The inference columns got 3.5–4× faster in 1.0.1, in pure NumPy: the exact
+jackknife was performing **six** sorts where the derivation says two, because
+each rank aggregate re-sorted the same array. A shared sort order fixed it, and
+a test now asserts the count.
+
+### Why there is still no compiled extension
+
+Because the profile says it would not pay. `rga` is two sorts and two dot
+products, and the sorts are 58–70% of the total, so even an *infinitely fast*
+sort caps the gain at 2.4–3.3×:
+
+| n | 2× `argsort` | `rga` total | sort share | ceiling if the sort were free |
+|---|---|---|---|---|
+| 10 000 | 1.3 ms | 2.3 ms | 58% | 2.4× |
+| 100 000 | 18 ms | 28 ms | 65% | 2.9× |
+| 1 000 000 | 280 ms | 400 ms | 70% | 3.3× |
+
+A Rust/PyO3 sort is perhaps 2–3× faster than NumPy's, not infinite, so the
+realistic gain is under 2× — against giving up the universal pure-Python wheel
+for `cibuildwheel` on 3 operating systems × 5 Python versions, on a package
+that today installs anywhere with only numpy. Sharing one sort between the
+aggregates delivered more than that, for free. `python benchmarks/bench.py`
+reproduces every number here, including this argument.
 
 ---
 
@@ -381,7 +466,7 @@ principle with no module.
 
 ```bash
 pip install -e ".[dev]"
-pytest                                    # 248 tests
+pytest                                    # 354 tests
 python benchmarks/bench.py
 python examples/bank_model_validation.py
 ```
@@ -398,8 +483,19 @@ Notable test files:
 - `tests/test_properties.py` — bounds, monotone invariance, asymmetry,
   `RGA == AUROC == WMW`, the Gini-correlation identity, curve areas
 - `tests/test_inference.py` — exact jackknife vs `O(n²)`, exact bootstrap vs
-  physical resampling, DeLong agreement, interval coverage, p-value uniformity
+  physical resampling, DeLong agreement, interval coverage, p-value uniformity,
+  and the sort count the derivation claims
 - `tests/test_upstream_regressions.py` — one test per upstream defect
+- `tests/test_missing_labels.py` — a missing group label must be refused, not
+  turned into a group of size zero
+- `tests/test_gap_noise_floor.py` — the parity gap net of noise must average 0
+  under exact parity, which is what the old bias correction never did
+- `tests/test_outcomes.py` — outcome criteria against hand-computed rates, plus
+  the family-wise error rate of their gap test
+- `tests/test_cohorts.py` — the cohort search must find a planted weakness and
+  stay quiet on pure noise
+- `tests/test_docs_math.py` — every formula in the Markdown must survive
+  GitHub's renderer
 
 ---
 

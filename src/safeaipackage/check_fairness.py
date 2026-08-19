@@ -63,6 +63,12 @@ def compute_rga_parity(
 
     ``float(result)`` is the gap; ``result.result`` is the full analysis. Prefer
     :func:`rgbox.rga_parity`, which takes arrays directly and needs no model.
+
+    The resampling is seeded (``random_state=0``), so two calls on the same
+    data give identical intervals and p-values. Until 1.0.1 no seed was passed,
+    which left ``result.gap_ci`` and ``result.gap_p_value`` drifting between
+    runs of the same script - the gap itself was always deterministic. Pass
+    :func:`rgbox.rga_parity` directly to choose a different seed.
     """
     if protectedvariable not in getattr(xtrain, "columns", []):
         raise InputError(f"{protectedvariable} is not in the variables")
@@ -80,6 +86,7 @@ def compute_rga_parity(
         xtest[protectedvariable],
         min_group_size=0,  # upstream applied no minimum
         attribute=protectedvariable,
+        random_state=0,
     )
     if result.gap is None:
         raise InputError(

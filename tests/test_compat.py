@@ -177,3 +177,20 @@ def test_top_level_reexports():
         "perturb",
     ):
         assert hasattr(safeaipackage, name)
+
+
+def test_compute_rga_parity_is_deterministic(rng):
+    """It used to pass no seed, so the CI and p-value drifted between runs."""
+    n = 400
+    frame = pd.DataFrame(
+        {"g": rng.binomial(1, 0.5, n).astype(float), "x": rng.normal(size=n)}
+    )
+    y = rng.binomial(1, 0.4, n).astype(float)
+    yhat = rng.normal(y, 1.0, n)
+
+    first = compute_rga_parity(frame, frame, y, yhat, None, "g")
+    second = compute_rga_parity(frame, frame, y, yhat, None, "g")
+
+    assert float(first) == float(second)
+    assert first.result.gap_ci == second.result.gap_ci
+    assert first.result.gap_p_value == second.result.gap_p_value

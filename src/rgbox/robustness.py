@@ -3,6 +3,31 @@
 ``RGR = RGA(yhat, yhat_perturbed)``: 1 means the perturbation left the ordering
 of predictions untouched, 0.5 means it destroyed it.
 
+The scale runs to 0, not to 0.5
+-------------------------------
+RGR is an RGA, so it lives in ``[0, 1]``, and **0.5 is the middle of the scale,
+not the bottom**. Read it as:
+
+=========  ==========================================================
+RGR        meaning
+=========  ==========================================================
+1          the perturbation did not change the ordering at all
+0.5        the perturbation destroyed the ordering (no information)
+< 0.5      the perturbation *inverted* the ordering
+0          the perturbation reversed it exactly
+=========  ==========================================================
+
+Values below 0.5 are not an anomaly, and ``"tailswap"`` reaches them by
+construction: swapping the lowest ``m`` fraction with the highest ``m``
+fraction at ``m = 0.5`` exchanges *every* value with its mirror, which is a
+verbatim reversal of the column. Measured on a 10-row column, the rank
+correlation with the original is ``+0.02`` at ``m = 0.10``, ``-0.58`` at
+``0.25`` and ``-1.00`` at ``0.50``. So for a model monotone in the perturbed
+feature, the top of the default grid gives ``RGR = 0`` and drags AURGR well
+below 0.5 - measured 0.217 for a score equal to the perturbed column. That is
+the measure behaving correctly on a perturbation that runs from "mild tail
+shock" to "sign flip"; it is not a floor violation.
+
 The hyperparameter problem
 --------------------------
 A single RGR number is only interpretable together with the perturbation that
@@ -22,20 +47,22 @@ random forest and one feature, upstream's default sweep gives:
 Nothing justifies 0.05 over 0.10, and two teams using different defaults cannot
 compare results. :func:`rgr_curve` therefore evaluates RGR over a grid and
 reports **AURGR**, the normalised area under the robustness curve - a single
-number with no free parameter, still on a ``[0.5, 1]``-ish scale where higher
-is more robust. Report AURGR; use a point RGR only when a specific stress
-scenario is mandated.
+number with no free parameter, on the same ``[0, 1]`` scale as RGR itself where
+higher is more robust. Report AURGR; use a point RGR only when a specific
+stress scenario is mandated.
 
 Perturbation kinds
 ------------------
 ``"tailswap"``
     The upstream scheme: pair the lowest and highest ``magnitude`` fraction of
     values and exchange them. Deterministic, distribution-preserving, and a
-    genuine tail shock. It is also *meaningless on discrete columns* - on a 0/1
-    indicator it swaps some zeros with some ones chosen arbitrarily among ties
-    and leaves the mean unchanged, and on a string column upstream sorted
-    lexicographically and produced a permutation with no interpretation at all.
-    Non-numeric columns are now rejected instead of silently mishandled.
+    genuine tail shock - up to ``magnitude = 0.5``, where it becomes an exact
+    reversal of the column (see above). It is also *meaningless on discrete
+    columns* - on a 0/1 indicator it swaps some zeros with some ones chosen
+    arbitrarily among ties and leaves the mean unchanged, and on a string
+    column upstream sorted lexicographically and produced a permutation with no
+    interpretation at all. Non-numeric columns are now rejected instead of
+    silently mishandled.
 
 ``"gaussian"``
     ``x + N(0, (magnitude * sd(x))^2)`` - the scheme used in the more recent
@@ -401,9 +428,18 @@ def rgr_curve(
 
     AURGR is the trapezoidal area under ``magnitude -> RGR``, anchored at
     ``RGR(0) = 1`` and divided by the width of the grid, so it lies on the same
-    scale as RGR itself and needs no hyperparameter to interpret. A model whose
-    ranking is unaffected by any shock scores 1; one that collapses immediately
-    scores near 0.5.
+    ``[0, 1]`` scale as RGR itself and needs no hyperparameter to interpret. A
+    model whose ranking is unaffected by any shock scores 1; one whose ranking
+    is destroyed everywhere on the grid scores 0.5.
+
+    **AURGR can fall below 0.5**, and routinely does. The default
+    ``"tailswap"`` grid spans the perturbation's whole legal domain, and at
+    ``magnitude = 0.5`` a tail swap is an exact reversal of the column, so a
+    model monotone in that feature scores ``RGR = 0`` there and AURGR lands
+    around 0.2. That is the average over the whole domain, which is what makes
+    it free of a hyperparameter; it is not a robustness score that bottomed
+    out. Compare AURGR across variables and across model versions, not against
+    an absolute 0.5 threshold. See the module docstring for the scale.
 
     Default grids: ``0.01..0.5`` for ``"tailswap"`` (its domain), and
     ``0.05..1.0`` noise-to-sigma ratios for ``"gaussian"``.

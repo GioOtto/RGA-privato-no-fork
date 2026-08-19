@@ -148,9 +148,16 @@ class RGBoxReport:
                         f"p = {parity['gap_p_value']:.4g} "
                         f"(family-wise, {parity['multiplicity']})"
                     )
-                    if parity.get("gap_bias_corrected") is not None:
+                    if parity.get("gap_excess_over_noise") is not None:
                         add("")
-                        add(f"Bias-corrected gap: {parity['gap_bias_corrected']:.4f}")
+                        add(
+                            f"Gap in excess of sampling noise: "
+                            f"{parity['gap_excess_over_noise']:+.4f} "
+                            f"(noise floor at these group sizes: "
+                            f"{parity['gap_noise_floor']:.4f}). "
+                            "Zero or below means the spread is no larger than "
+                            "exact parity would produce by itself."
+                        )
                     # Naming the uncorrected value is what makes the correction
                     # auditable: a reader who only ever sees the adjusted number
                     # cannot tell how much of it was the multiplicity penalty.
@@ -170,6 +177,36 @@ class RGBoxReport:
                 add(
                     f"RGF (ranking reliance on `{block['attribute']}`): "
                     f"{block['rgf']:.4f} - RGE {block['rge']:.4f}"
+                )
+                add("")
+            leakage = self.fairness.get("proxy_leakage")
+            if leakage:
+                add("### Proxy leakage")
+                add("")
+                model_row = leakage.get("model_leakage")
+                if model_row and model_row.get("leakage") is not None:
+                    add(
+                        f"The model's own score ranks `{model_row['level']}` "
+                        f"with RGA {model_row['rga']:.4f} "
+                        f"(leakage {model_row['leakage']:.4f})."
+                    )
+                    add("")
+                scored = [
+                    row for row in leakage["proxies"] if row.get("rga") is not None
+                ]
+                if scored:
+                    add("| predictor | level | RGA | leakage |")
+                    add("|---|---|---|---|")
+                    for row in scored[:10]:
+                        add(
+                            f"| {row['variable']} | {row['level']} | "
+                            f"{row['rga']:.4f} | {row['leakage']:.4f} |"
+                        )
+                    add("")
+                add(
+                    "> Leakage is `|2*RGA - 1|` between the predictor and the "
+                    "protected attribute: 0 means the predictor carries none "
+                    "of it, 1 means it reconstructs it exactly."
                 )
                 add("")
             add(
@@ -361,16 +398,7 @@ def rgbox_report(
                 greater_is_better=greater_is_better,
                 random_state=random_state,
             )
-            block["proxy_leakage"] = proxy_leakage(
-                X_train,
-                X_test,
-                model,
-                protected,
-                yhat=yhat,
-                pos_label=pos_label,
-                greater_is_better=greater_is_better,
-                random_state=random_state,
-            )
+        block["proxy_leakage"] = proxy_leakage(X_test, protected, yhat=yhat)
         gap = block["rga_parity"]["gap"]
         if gap is None:
             warnings.append(

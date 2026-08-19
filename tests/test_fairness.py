@@ -154,8 +154,14 @@ def test_gap_interval_is_documented_as_non_negative(rng):
     result = rga_parity(y, scores, groups, n_resamples=800, random_state=0)
     assert result.gap_ci[0] >= 0.0
     assert "does not contain 0" in result.GAP_CI_NOTE
-    # The bias-corrected point estimate is smaller than the raw max - min.
-    assert result.gap_bias_corrected <= result.gap + 1e-12
+    # The gap net of the noise floor is smaller than the raw max - min, and the
+    # floor itself is strictly positive: max - min is inflated even under
+    # exact parity.
+    assert result.gap_noise_floor > 0.0
+    assert result.gap_excess_over_noise == pytest.approx(
+        result.gap - result.gap_noise_floor
+    )
+    assert result.gap_excess_over_noise < result.gap
 
 
 def test_pairwise_comparisons_cover_every_pair(rng):
@@ -218,7 +224,7 @@ def test_proxy_leakage_finds_the_proxy(rng):
             "unrelated": rng.normal(size=n),
         }
     )
-    result = proxy_leakage(frame, frame, lambda X: X["unrelated"], "gender")
+    result = proxy_leakage(frame, "gender")
     ranked = [row["variable"] for row in result["proxies"]]
     assert ranked[0] == "proxy"
     assert result["proxies"][0]["leakage"] > 0.8
@@ -300,7 +306,7 @@ def test_proxy_leakage_accepts_a_one_hot_group(rng):
     )
     dummies = [c for c in frame.columns if c.startswith("r_")]
 
-    result = proxy_leakage(frame, frame, lambda X: X["unrelated"], dummies)
+    result = proxy_leakage(frame, dummies)
     # The dummies are the attribute; they must not be scored as its proxies.
     assert {row["variable"] for row in result["proxies"]} == {"unrelated", "postcode"}
     top = result["proxies"][0]

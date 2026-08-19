@@ -23,7 +23,13 @@ from typing import Any
 import numpy as np
 
 from ._ranks import average_ranks
-from ._validation import as_1d_float, as_score_pair, check_level
+from ._validation import (
+    as_1d_float,
+    as_group_labels,
+    as_score_pair,
+    check_level,
+    distinct_levels,
+)
 from .core import rga
 from .exceptions import InputError, InsufficientDataError, UndefinedMetricError
 from .inference import RGAComparison, RGAEstimate, rga_ci, rga_compare, rga_test
@@ -348,18 +354,15 @@ def rga_by_segment(
     rows) is reported with a note rather than raising - a two-obligor vintage
     or rating band is a normal thing to find in a portfolio cut, and it must
     not take the whole report down with it.
+
+    A *missing* segment label is a different matter and is rejected: it is not
+    a small segment, it is a row that belongs to no segment, and letting it
+    through made the table's row counts disagree with the sample.
     """
     y_arr, yhat_arr = as_score_pair(y, yhat)
-    labels = np.asarray(
-        segments.to_numpy() if hasattr(segments, "to_numpy") else segments
-    ).ravel()
-    if labels.size != y_arr.size:
-        raise InputError(
-            f"'segments' has {labels.size} entries but y has {y_arr.size}."
-        )
+    labels = as_group_labels(segments, "segments", y_arr.size)
     rows = []
-    for label in dict.fromkeys(labels.tolist()):
-        mask = labels == label
+    for label, mask in distinct_levels(labels):
         size = int(mask.sum())
         record: dict[str, Any] = {
             "segment": label,

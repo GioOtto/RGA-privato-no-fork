@@ -26,12 +26,13 @@ def test_fast_jackknife_is_exact(sample):
 
 def test_bootstrap_weights_reproduce_the_resampled_sample(rng):
     """A multinomial reweighting must equal the physically resampled RGA."""
+    from rgbox._ranks import sorted_index
     from rgbox.inference import _multinomial_rga
 
     y = rng.integers(0, 4, 200).astype(float)
     yhat = rng.integers(0, 6, 200).astype(float)
     counts = rng.multinomial(200, np.full(200, 1 / 200), size=25).astype(float)
-    fast = _multinomial_rga(y, yhat, counts)
+    fast = _multinomial_rga(y, counts, sorted_index(yhat), sorted_index(y))
     for row, value in zip(counts, fast):
         expected = rga(np.repeat(y, row.astype(int)), np.repeat(yhat, row.astype(int)))
         assert value == pytest.approx(expected, abs=1e-11)
@@ -256,3 +257,62 @@ def test_bootstrap_values_shape(continuous):
     )
     # Same weights for both scores, so identical inputs give identical draws.
     assert np.allclose(paired_a, paired_b)
+
+
+def test_the_delete_one_family_really_costs_two_sorts(rng, monkeypatch):
+    """docs/THEORY.md 2.2 claims two sorts; it used to perform six.
+
+    `average_ranks`, `suffix_sums_strictly_greater` and `tie_group_sums` each
+    re-sorted the same array, and `_leave_one_out_sums` called all three - twice
+    over, once per argument. A shared `SortedIndex` brings it back to what the
+    derivation says. This asserts the count rather than the timing, so it does
+    not flake on a loaded machine.
+    """
+    import numpy as np_module
+
+    import rgbox._ranks as ranks_module
+
+    calls = {"n": 0}
+    real = np_module.argsort
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ranks_module.np, "argsort", counting)
+
+    y = rng.normal(size=500)
+    yhat = 0.6 * y + rng.normal(size=500)
+
+    calls["n"] = 0
+    jackknife_values(y, yhat)
+    assert calls["n"] == 2, "the exact jackknife must sort each argument once"
+
+    calls["n"] = 0
+    influence_values(y, yhat)
+    assert calls["n"] == 2, "the influence function must sort each argument once"
+
+    calls["n"] = 0
+    rga(y, yhat)
+    assert calls["n"] == 2
+
+
+def test_bootstrap_does_not_re_sort_per_block(rng, monkeypatch):
+    """The sort order does not depend on the replicate, so it is hoisted."""
+    import rgbox._ranks as ranks_module
+
+    calls = {"n": 0}
+    real = np.argsort
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ranks_module.np, "argsort", counting)
+
+    y = rng.normal(size=400)
+    yhat = 0.6 * y + rng.normal(size=400)
+    calls["n"] = 0
+    bootstrap_values(y, yhat, n_resamples=500, random_state=0, block_size=50)
+    # Ten blocks, but still one sort per argument for the whole run.
+    assert calls["n"] == 2
