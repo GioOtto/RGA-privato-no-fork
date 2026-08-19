@@ -1,0 +1,27 @@
+# Full development environment: what you need to clone this repo and run the
+# whole test suite. Equivalent to `pip install -e ".[dev]"`, which is what CI
+# runs; pyproject.toml remains the source of truth and
+# tests/test_packaging.py asserts these two never drift apart.
+#
+# NOTE: installing all of this is *not* required to use the package. rgbox's
+# only hard dependency is numpy - rgbox.core and rgbox.inference are pure
+# NumPy, and a CI job exists solely to keep it that way. Everything below the
+# first block is needed only for the DataFrame-based workflows (RGE, RGR,
+# fairness, the report) or for development itself.
+
+# --- core: the only hard requirement -----------------------------------
+numpy>=1.22
+
+# --- DataFrame workflows: RGE, RGR, fairness, report, sklearn adapter ---
+pandas>=1.5
+scikit-learn>=1.0
+
+# --- optional accelerators / extras -------------------------------------
+# scipy is optional everywhere: it supplies Kendall's tau in accuracy_report
+# and is otherwise unused. Absent, those fields come back None, never a crash.
+scipy>=1.8
+
+# --- development ---------------------------------------------------------
+pytest>=7.0
+pytest-cov>=4.0
+ruff>=0.5
