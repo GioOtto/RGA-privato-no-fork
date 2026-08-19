@@ -91,9 +91,9 @@ def test_equals_gini_correlation_identity(sample):
         pytest.skip("undefined by design")
     scipy_stats = pytest.importorskip("scipy.stats")
     centred = y - y.mean()
-    expected = 0.5 + (
-        centred @ scipy_stats.rankdata(yhat)
-    ) / (2 * (centred @ scipy_stats.rankdata(y)))
+    expected = 0.5 + (centred @ scipy_stats.rankdata(yhat)) / (
+        2 * (centred @ scipy_stats.rankdata(y))
+    )
     assert rga(y, yhat) == pytest.approx(expected, abs=1e-12)
 
 

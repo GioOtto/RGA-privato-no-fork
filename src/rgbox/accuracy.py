@@ -147,8 +147,12 @@ def accuracy_report(
     y_arr, yhat_arr = as_score_pair(y, yhat, min_size=3)
     level = check_level(level)
     estimate = rga_ci(
-        y_arr, yhat_arr, method=method, level=level,
-        n_resamples=n_resamples, random_state=random_state,
+        y_arr,
+        yhat_arr,
+        method=method,
+        level=level,
+        n_resamples=n_resamples,
+        random_state=random_state,
     )
     unique = np.unique(y_arr)
     is_binary = unique.size == 2
@@ -222,15 +226,23 @@ def rga_ovr(
         indicator = (y_arr == label).astype(np.float64)
         support = int(indicator.sum())
         if support == 0 or support == y_arr.size:
-            per_class.append({"class": label, "n_positive": support, "rga": None,
-                              "note": "class absent or exhaustive"})
+            per_class.append(
+                {
+                    "class": label,
+                    "n_positive": support,
+                    "rga": None,
+                    "note": "class absent or exhaustive",
+                }
+            )
             continue
-        per_class.append({
-            "class": label,
-            "n_positive": support,
-            "rga": rga(indicator, proba_arr[:, index]),
-            "note": "",
-        })
+        per_class.append(
+            {
+                "class": label,
+                "n_positive": support,
+                "rga": rga(indicator, proba_arr[:, index]),
+                "note": "",
+            }
+        )
 
     usable = [row for row in per_class if row["rga"] is not None]
     if not usable:
@@ -271,8 +283,14 @@ def compare_models(
     if len(scores) < 1:
         raise InputError("'scores' must contain at least one model.")
     estimates = {
-        name: rga_ci(y, values, method=method, level=level,
-                     n_resamples=n_resamples, random_state=random_state)
+        name: rga_ci(
+            y,
+            values,
+            method=method,
+            level=level,
+            n_resamples=n_resamples,
+            random_state=random_state,
+        )
         for name, values in scores.items()
     }
     ordered = sorted(estimates.items(), key=lambda kv: kv[1].estimate, reverse=True)
@@ -282,9 +300,17 @@ def compare_models(
         raise InputError(f"baseline {baseline!r} is not among the models.")
 
     comparisons: list[RGAComparison] = [
-        rga_compare(y, scores[name], scores[baseline], method=method, level=level,
-                    n_resamples=n_resamples, random_state=random_state)
-        for name, _ in ordered if name != baseline
+        rga_compare(
+            y,
+            scores[name],
+            scores[baseline],
+            method=method,
+            level=level,
+            n_resamples=n_resamples,
+            random_state=random_state,
+        )
+        for name, _ in ordered
+        if name != baseline
     ]
     return {
         "baseline": baseline,
@@ -335,12 +361,19 @@ def rga_by_segment(
     for label in dict.fromkeys(labels.tolist()):
         mask = labels == label
         size = int(mask.sum())
-        record: dict[str, Any] = {"segment": label, "n": size,
-                                  "reliable": size >= min_size}
+        record: dict[str, Any] = {
+            "segment": label,
+            "n": size,
+            "reliable": size >= min_size,
+        }
         try:
             estimate = rga_ci(
-                y_arr[mask], yhat_arr[mask], method=method, level=level,
-                n_resamples=n_resamples, random_state=random_state,
+                y_arr[mask],
+                yhat_arr[mask],
+                method=method,
+                level=level,
+                n_resamples=n_resamples,
+                random_state=random_state,
             )
             record.update(estimate.to_dict())
         except (UndefinedMetricError, InsufficientDataError, InputError) as exc:
@@ -394,16 +427,18 @@ def contamination_curve(
             except UndefinedMetricError:
                 continue
             rmse_draws.append(float(np.sqrt(np.mean((contaminated - yhat_arr) ** 2))))
-        rows.append({
-            "fraction": fraction,
-            "n_contaminated": count,
-            "rga": float(np.mean(rga_draws)),
-            "rga_relative_change": abs(float(np.mean(rga_draws)) - clean_rga)
-            / max(abs(clean_rga), 1e-12),
-            "rmse": float(np.mean(rmse_draws)),
-            "rmse_relative_change": abs(float(np.mean(rmse_draws)) - clean_rmse)
-            / max(abs(clean_rmse), 1e-12),
-        })
+        rows.append(
+            {
+                "fraction": fraction,
+                "n_contaminated": count,
+                "rga": float(np.mean(rga_draws)),
+                "rga_relative_change": abs(float(np.mean(rga_draws)) - clean_rga)
+                / max(abs(clean_rga), 1e-12),
+                "rmse": float(np.mean(rmse_draws)),
+                "rmse_relative_change": abs(float(np.mean(rmse_draws)) - clean_rmse)
+                / max(abs(clean_rmse), 1e-12),
+            }
+        )
     return {
         "clean_rga": clean_rga,
         "clean_rmse": clean_rmse,

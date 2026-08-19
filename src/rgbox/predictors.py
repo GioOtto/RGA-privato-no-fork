@@ -116,20 +116,26 @@ def as_score_function(
     sign = 1.0 if greater_is_better else -1.0
 
     is_estimator = any(
-        hasattr(model, attr) for attr in ("predict", "predict_proba", "decision_function")
+        hasattr(model, attr)
+        for attr in ("predict", "predict_proba", "decision_function")
     )
     if callable(model) and not is_estimator:
+
         def from_callable(X: Any) -> np.ndarray:
             return sign * np.asarray(model(X), dtype=np.float64).ravel()
+
         return from_callable
 
     if hasattr(model, "predict_proba") and _looks_like_classifier(model):
+
         def from_proba(X: Any) -> np.ndarray:
             proba = np.asarray(model.predict_proba(X), dtype=np.float64)
             return sign * _positive_column(model, proba, pos_label).ravel()
+
         return from_proba
 
     if hasattr(model, "decision_function"):
+
         def from_margin(X: Any) -> np.ndarray:
             scores = np.asarray(model.decision_function(X), dtype=np.float64)
             if scores.ndim > 1 and scores.shape[1] > 1:
@@ -138,11 +144,14 @@ def as_score_function(
                     "pos_label or an explicit score function."
                 )
             return sign * scores.ravel()
+
         return from_margin
 
     if hasattr(model, "predict"):
+
         def from_predict(X: Any) -> np.ndarray:
             return sign * np.asarray(model.predict(X), dtype=np.float64).ravel()
+
         return from_predict
 
     raise ModelAdapterError(
@@ -180,7 +189,9 @@ def _is_label(value: Any, available_set: set) -> bool:
         return False
 
 
-def resolve_columns(columns: Sequence[Any] | Any, frame: Any, argument: str) -> list[Any]:
+def resolve_columns(
+    columns: Sequence[Any] | Any, frame: Any, argument: str
+) -> list[Any]:
     """Normalise a column selection and check it against the frame.
 
     A tuple is ambiguous: it is both a sequence of labels and a legal label in

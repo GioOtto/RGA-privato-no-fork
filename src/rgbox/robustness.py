@@ -163,9 +163,11 @@ class RGRResult:
 
     @property
     def label(self) -> str:
-        return self.variables[0] if len(self.variables) == 1 else "{" + ", ".join(
-            str(v) for v in self.variables
-        ) + "}"
+        return (
+            self.variables[0]
+            if len(self.variables) == 1
+            else "{" + ", ".join(str(v) for v in self.variables) + "}"
+        )
 
     def to_dict(self) -> dict[str, Any]:
         record = {
@@ -199,9 +201,11 @@ class RGRCurve:
 
     @property
     def label(self) -> str:
-        return self.variables[0] if len(self.variables) == 1 else "{" + ", ".join(
-            str(v) for v in self.variables
-        ) + "}"
+        return (
+            self.variables[0]
+            if len(self.variables) == 1
+            else "{" + ", ".join(str(v) for v in self.variables) + "}"
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -235,9 +239,7 @@ def _perturbed_scores(
     """
     perturbed = X_test
     for column in columns:
-        perturbed = perturb(
-            perturbed, column, magnitude, kind=kind, random_state=rng
-        )
+        perturbed = perturb(perturbed, column, magnitude, kind=kind, random_state=rng)
     return np.asarray(score_fn(perturbed), dtype=np.float64).ravel()
 
 
@@ -341,22 +343,37 @@ def rgr(
         per_draw: list[RGAEstimate] = []
         for repeat in range(n_repeats):
             scores = _perturbed_scores(
-                score_fn, X_test, chunk, magnitude, kind,
+                score_fn,
+                X_test,
+                chunk,
+                magnitude,
+                kind,
                 np.random.default_rng(seeds[repeat]),
             )
             draws.append(rga(baseline, scores))
             if ci:
-                per_draw.append(rga_ci(
-                    baseline, scores, method=ci_method, level=level,
-                    random_state=random_state, n_resamples=n_resamples,
-                ))
+                per_draw.append(
+                    rga_ci(
+                        baseline,
+                        scores,
+                        method=ci_method,
+                        level=level,
+                        random_state=random_state,
+                        n_resamples=n_resamples,
+                    )
+                )
         value = float(np.mean(draws))
         spread = float(np.std(draws, ddof=1)) if n_repeats > 1 else None
         estimate = _pool_across_draws(per_draw, draws, level, ci_method) if ci else None
         results.append(
             RGRResult(
-                variables=tuple(chunk), rgr=value, magnitude=magnitude, kind=kind,
-                n=baseline.size, n_repeats=n_repeats, spread=spread,
+                variables=tuple(chunk),
+                rgr=value,
+                magnitude=magnitude,
+                kind=kind,
+                n=baseline.size,
+                n_repeats=n_repeats,
+                spread=spread,
                 estimate=estimate,
             )
         )
@@ -411,9 +428,17 @@ def rgr_curve(
     }
     for magnitude in magnitudes:
         step = rgr(
-            X_test, model, columns, yhat=yhat, magnitude=float(magnitude), kind=kind,
-            group=group, n_repeats=n_repeats, pos_label=pos_label,
-            greater_is_better=greater_is_better, random_state=random_state,
+            X_test,
+            model,
+            columns,
+            yhat=yhat,
+            magnitude=float(magnitude),
+            kind=kind,
+            group=group,
+            n_repeats=n_repeats,
+            pos_label=pos_label,
+            greater_is_better=greater_is_better,
+            random_state=random_state,
         )
         for item in step:
             per_group[item.variables].append(item)
@@ -425,14 +450,20 @@ def rgr_curve(
         # Anchor at (0, 1): an unperturbed input cannot change the ranking.
         xs = np.concatenate(([0.0], magnitudes))
         ys = np.concatenate(([1.0], values))
-        area = float(np.trapezoid(ys, xs)) if hasattr(np, "trapezoid") else float(
-            np.trapz(ys, xs)
+        area = (
+            float(np.trapezoid(ys, xs))
+            if hasattr(np, "trapezoid")
+            else float(np.trapz(ys, xs))
         )
         curves.append(
             RGRCurve(
-                variables=chunk, magnitudes=magnitudes, values=values,
-                aurgr=area / float(magnitudes[-1]), kind=kind,
-                n=items[0].n, per_magnitude=items,
+                variables=chunk,
+                magnitudes=magnitudes,
+                values=values,
+                aurgr=area / float(magnitudes[-1]),
+                kind=kind,
+                n=items[0].n,
+                per_magnitude=items,
             )
         )
     curves.sort(key=lambda curve: curve.aurgr)

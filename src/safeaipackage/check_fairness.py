@@ -34,10 +34,7 @@ class ImparityScore(float):
         return obj
 
     def __str__(self) -> str:
-        return (
-            "The RGA-based imparity between the protected groups is "
-            f"{float(self)}."
-        )
+        return f"The RGA-based imparity between the protected groups is {float(self)}."
 
     def __repr__(self) -> str:
         return f"ImparityScore({float(self)!r})"
@@ -81,7 +78,7 @@ def compute_rga_parity(
         ytest,
         scores,
         xtest[protectedvariable],
-        min_group_size=0,          # upstream applied no minimum
+        min_group_size=0,  # upstream applied no minimum
         attribute=protectedvariable,
     )
     if result.gap is None:

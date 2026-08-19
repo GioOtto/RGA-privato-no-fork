@@ -82,9 +82,7 @@ def as_weights(weights: Any, n: int) -> np.ndarray | None:
         return None
     w = as_1d_float(weights, "weights")
     if w.size != n:
-        raise InputError(
-            f"'weights' must have length {n}; got {w.size}."
-        )
+        raise InputError(f"'weights' must have length {n}; got {w.size}.")
     if np.any(w < 0):
         raise InputError("'weights' must be non-negative.")
     total = w.sum()

@@ -54,7 +54,9 @@ def test_every_group_carries_a_confidence_interval(rng):
 
 def test_small_groups_are_reported_but_excluded_from_the_gap(rng):
     """A 12-obligor segment must not drive the headline number."""
-    y = np.concatenate([rng.binomial(1, 0.3, 800), rng.binomial(1, 0.3, 12)]).astype(float)
+    y = np.concatenate([rng.binomial(1, 0.3, 800), rng.binomial(1, 0.3, 12)]).astype(
+        float
+    )
     scores = np.concatenate([rng.normal(y[:800], 1.0), rng.normal(0, 1, 12)])
     groups = np.array(["big"] * 800 + ["tiny"] * 12)
     result = rga_parity(y, scores, groups, min_group_size=50)
@@ -72,7 +74,7 @@ def test_perfect_parity_gives_a_non_significant_gap(rng):
     n = 4000
     y = rng.binomial(1, 0.35, n).astype(float)
     scores = rng.normal(y, 1.0, n)
-    groups = rng.binomial(1, 0.5, n)          # independent of everything
+    groups = rng.binomial(1, 0.5, n)  # independent of everything
     result = rga_parity(y, scores, groups)
     assert result.gap_p_value > 0.05
 
@@ -99,9 +101,7 @@ def test_two_groups_need_no_correction(rng):
     scores = rng.normal(y * 0.8, 1.0, n)
     groups = rng.binomial(1, 0.5, n)
     result = rga_parity(y, scores, groups, n_resamples=4000, random_state=0)
-    assert result.gap_p_value == pytest.approx(
-        result.gap_p_value_unadjusted, abs=0.02
-    )
+    assert result.gap_p_value == pytest.approx(result.gap_p_value_unadjusted, abs=0.02)
     assert "1 pair" in result.multiplicity
 
 
@@ -112,7 +112,7 @@ def test_the_correction_tightens_as_pairs_multiply(rng):
     scores = rng.normal(y * 0.8, 1.0, n)
     ratios = []
     for k in (2, 3, 5):
-        groups = rng.integers(0, k, n)       # independent of y and scores
+        groups = rng.integers(0, k, n)  # independent of y and scores
         result = rga_parity(y, scores, groups, n_resamples=4000, random_state=0)
         ratios.append(result.gap_p_value / max(result.gap_p_value_unadjusted, 1e-12))
         assert len(result.pairwise) == k * (k - 1) // 2
@@ -136,13 +136,13 @@ def test_max_t_controls_the_family_wise_error_rate():
     for _ in range(trials):
         draw = np.random.default_rng(master.integers(2**32))
         y = draw.binomial(1, 0.35, n).astype(float)
-        scores = draw.normal(y * 0.8, 1.0, n)        # identical for every group
+        scores = draw.normal(y * 0.8, 1.0, n)  # identical for every group
         groups = draw.integers(0, 5, n)
         result = rga_parity(y, scores, groups, n_resamples=1000, random_state=0)
         unadjusted += result.gap_p_value_unadjusted < 0.05
         adjusted += result.gap_p_value < 0.05
-    assert unadjusted >= 2          # the old behaviour, ~27% of the time
-    assert adjusted <= 1            # the corrected one, ~5%
+    assert unadjusted >= 2  # the old behaviour, ~27% of the time
+    assert adjusted <= 1  # the corrected one, ~5%
 
 
 def test_gap_interval_is_documented_as_non_negative(rng):
@@ -189,10 +189,12 @@ def test_rgf_matches_the_r_code_definition(rng):
     """RGF = RGA(full scores, scores without the protected attribute)."""
     pd = pytest.importorskip("pandas")
     n = 800
-    frame = pd.DataFrame({
-        "x": rng.normal(size=n),
-        "gender": rng.binomial(1, 0.5, n).astype(float),
-    })
+    frame = pd.DataFrame(
+        {
+            "x": rng.normal(size=n),
+            "gender": rng.binomial(1, 0.5, n).astype(float),
+        }
+    )
 
     def blind(X):
         return X["x"]
@@ -209,11 +211,13 @@ def test_proxy_leakage_finds_the_proxy(rng):
     pd = pytest.importorskip("pandas")
     n = 1000
     protected = rng.binomial(1, 0.5, n).astype(float)
-    frame = pd.DataFrame({
-        "gender": protected,
-        "proxy": protected * 3 + rng.normal(0, 0.3, n),
-        "unrelated": rng.normal(size=n),
-    })
+    frame = pd.DataFrame(
+        {
+            "gender": protected,
+            "proxy": protected * 3 + rng.normal(0, 0.3, n),
+            "unrelated": rng.normal(size=n),
+        }
+    )
     result = proxy_leakage(frame, frame, lambda X: X["unrelated"], "gender")
     ranked = [row["variable"] for row in result["proxies"]]
     assert ranked[0] == "proxy"
@@ -282,12 +286,14 @@ def test_proxy_leakage_accepts_a_one_hot_group(rng):
     pd = pytest.importorskip("pandas")
     n = 1200
     region = rng.choice(["north", "centre", "south"], n, p=[0.45, 0.30, 0.25])
-    frame = pd.DataFrame({
-        "unrelated": rng.normal(size=n),
-        # Carries the "south" level only, so it is invisible to any single
-        # other dummy but is a genuine proxy for the attribute.
-        "postcode": (region == "south").astype(float) + rng.normal(0, 0.05, n),
-    })
+    frame = pd.DataFrame(
+        {
+            "unrelated": rng.normal(size=n),
+            # Carries the "south" level only, so it is invisible to any single
+            # other dummy but is a genuine proxy for the attribute.
+            "postcode": (region == "south").astype(float) + rng.normal(0, 0.05, n),
+        }
+    )
     frame = pd.concat(
         [frame, pd.get_dummies(region, prefix="r", drop_first=True).astype(float)],
         axis=1,
@@ -313,8 +319,9 @@ def test_labels_from_dummies_inverts_a_drop_first_encoding(rng):
     labels = labels_from_dummies(dummies, list(dummies.columns), reference="r_centre")
 
     # get_dummies drops the first level alphabetically, i.e. "centre".
-    rebuilt = np.where(labels == "r_centre", "centre",
-                       [str(v).removeprefix("r_") for v in labels])
+    rebuilt = np.where(
+        labels == "r_centre", "centre", [str(v).removeprefix("r_") for v in labels]
+    )
     assert list(rebuilt) == list(region)
 
 

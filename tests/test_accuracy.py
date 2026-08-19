@@ -45,8 +45,8 @@ def test_auroc_is_computed_independently_of_rga():
     Positives are ranked 2nd, 3.5th and 3.5th of five (the tie splits ranks 3
     and 4), so U = (2 + 3.5 + 3.5) - 3*4/2 = 3 and AUROC = 3 / (3*2) = 0.5.
     """
-    y = np.array([7.0, 7.0, 9.0, 9.0, 9.0])          # labels are not 0/1
-    yhat = np.array([0.1, 0.9, 0.4, 0.6, 0.6])       # a tie among the positives
+    y = np.array([7.0, 7.0, 9.0, 9.0, 9.0])  # labels are not 0/1
+    yhat = np.array([0.1, 0.9, 0.4, 0.6, 0.6])  # a tie among the positives
     report = accuracy_report(y, yhat)
     assert report.reference["auroc"] == pytest.approx(0.5)
 
@@ -54,7 +54,7 @@ def test_auroc_is_computed_independently_of_rga():
 def test_auroc_matches_sklearn_where_available(rng):
     metrics = pytest.importorskip("sklearn.metrics")
     y = rng.binomial(1, 0.3, 300).astype(float)
-    yhat = np.round(rng.normal(y, 1.0, 300), 1)      # rounding forces ties
+    yhat = np.round(rng.normal(y, 1.0, 300), 1)  # rounding forces ties
     report = accuracy_report(y, yhat)
     assert report.reference["auroc"] == pytest.approx(
         metrics.roc_auc_score(y, yhat), abs=1e-12
@@ -65,12 +65,14 @@ def test_kendall_is_optional(binary):
     y, yhat = binary
     report = accuracy_report(y, yhat)
     # None when SciPy is absent, a number when present - never a crash.
-    assert report.reference["kendall_tau"] is None or -1 <= report.reference[
-        "kendall_tau"
-    ] <= 1
+    assert (
+        report.reference["kendall_tau"] is None
+        or -1 <= report.reference["kendall_tau"] <= 1
+    )
 
 
 # ---------------------------------------------------------------- multiclass
+
 
 def test_one_vs_rest_uses_every_class(rng):
     """Upstream scored a 3-class model as P(class == classes_[1]) alone."""
@@ -120,6 +122,7 @@ def test_one_vs_rest_input_checks(rng):
 
 # ---------------------------------------------------------------- comparison
 
+
 def test_compare_models_ranks_and_tests(rng):
     n = 2500
     y = rng.binomial(1, 0.3, n).astype(float)
@@ -143,6 +146,7 @@ def test_compare_models_rejects_unknown_baseline(binary):
 
 
 # ------------------------------------------------------------------ segments
+
 
 def test_segments_are_flagged_when_too_small(rng):
     y = rng.binomial(1, 0.35, 1000).astype(float)
@@ -187,13 +191,18 @@ def test_degenerate_segment_is_reported_not_raised(rng):
 
 # ------------------------------------------------------------- contamination
 
+
 def test_rga_is_far_more_outlier_stable_than_rmse(rng):
     """Quantifies the papers' robustness claim, which they never measured."""
     y = rng.lognormal(0, 1, 800)
     yhat = 0.7 * y + rng.normal(0, 0.3, 800)
     curve = contamination_curve(
-        y, yhat, fractions=(0.0, 0.01, 0.05), magnitude=50.0,
-        n_repeats=15, random_state=0,
+        y,
+        yhat,
+        fractions=(0.0, 0.01, 0.05),
+        magnitude=50.0,
+        n_repeats=15,
+        random_state=0,
     )
     for row in curve["curve"][1:]:
         assert row["rmse_relative_change"] > 5 * row["rga_relative_change"]

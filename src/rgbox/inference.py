@@ -86,30 +86,56 @@ IntervalKind = Literal["normal", "percentile", "basic", "bca"]
 def _normal_quantile(p: float) -> float:
     """Inverse standard normal CDF; avoids a hard SciPy dependency."""
     # Acklam's rational approximation, refined by one Halley step.
-    a = (-3.969683028665376e01, 2.209460984245205e02, -2.759285104469687e02,
-         1.383577518672690e02, -3.066479806614716e01, 2.506628277459239e00)
-    b = (-5.447609879822406e01, 1.615858368580409e02, -1.556989798598866e02,
-         6.680131188771972e01, -1.328068155288572e01)
-    c = (-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e00,
-         -2.549732539343734e00, 4.374664141464968e00, 2.938163982698783e00)
-    d = (7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00,
-         3.754408661907416e00)
+    a = (
+        -3.969683028665376e01,
+        2.209460984245205e02,
+        -2.759285104469687e02,
+        1.383577518672690e02,
+        -3.066479806614716e01,
+        2.506628277459239e00,
+    )
+    b = (
+        -5.447609879822406e01,
+        1.615858368580409e02,
+        -1.556989798598866e02,
+        6.680131188771972e01,
+        -1.328068155288572e01,
+    )
+    c = (
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e00,
+        -2.549732539343734e00,
+        4.374664141464968e00,
+        2.938163982698783e00,
+    )
+    d = (
+        7.784695709041462e-03,
+        3.224671290700398e-01,
+        2.445134137142996e00,
+        3.754408661907416e00,
+    )
     p_low, p_high = 0.02425, 1 - 0.02425
     if p <= 0.0 or p >= 1.0:
         raise InputError(f"quantile argument must lie in (0, 1); got {p!r}.")
     if p < p_low:
         q = math.sqrt(-2 * math.log(p))
         x = (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
-            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1
+        )
     elif p <= p_high:
         q = p - 0.5
         r = q * q
-        x = (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (
-            ((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+        x = (
+            (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5])
+            * q
+            / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+        )
     else:
         q = math.sqrt(-2 * math.log(1 - p))
         x = -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
-            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1
+        )
     e = 0.5 * math.erfc(-x / math.sqrt(2)) - p
     u = e * math.sqrt(2 * math.pi) * math.exp(x * x / 2)
     return x - u / (1 + x * u / 2)
@@ -122,6 +148,7 @@ def _normal_cdf(x: float) -> float:
 # --------------------------------------------------------------------------
 # resampling engines
 # --------------------------------------------------------------------------
+
 
 def _leave_one_out_sums(values: np.ndarray, payload: np.ndarray) -> np.ndarray:
     """``S(k) = sum_{i != k} payload_i * R^{-k}(values_i)`` for every ``k``.
@@ -178,8 +205,7 @@ def influence_values(y: np.ndarray, yhat: np.ndarray) -> np.ndarray:
     # E[Y 1{V > v_i}] + E[Y 1{V = v_i}] / 2, matching the mid-CDF convention.
     def upper_tail_mean(values: np.ndarray) -> np.ndarray:
         return (
-            suffix_sums_strictly_greater(values, y)
-            + 0.5 * tie_group_sums(values, y)
+            suffix_sums_strictly_greater(values, y) + 0.5 * tie_group_sums(values, y)
         ) / n
 
     psi = float(np.mean(y * cdf_z))
@@ -212,11 +238,11 @@ def _multinomial_rga(
         order = np.argsort(values, kind="stable")
         gid = tie_group_ids(values[order])
         starts = np.flatnonzero(np.concatenate(([True], np.diff(gid) != 0)))
-        sorted_counts = counts[:, order]                       # (B, n)
+        sorted_counts = counts[:, order]  # (B, n)
         group_weight = np.add.reduceat(sorted_counts, starts, axis=1)
         before = np.cumsum(group_weight, axis=1) - group_weight
         group_rank = before + (group_weight + 1.0) / 2.0
-        ranks = group_rank[:, gid]                             # (B, n)
+        ranks = group_rank[:, gid]  # (B, n)
         centred = sorted_counts * (y[order][None, :] - means)
         return np.einsum("bn,bn->b", centred, ranks)
 
@@ -251,15 +277,17 @@ def bootstrap_values(
         block_size = int(min(n_resamples, max(1, 4_000_000 // max(n, 1))))
     probabilities = np.full(n, 1.0 / n)
     primary = np.empty(n_resamples, dtype=np.float64)
-    secondary = np.empty(n_resamples, dtype=np.float64) if paired_with is not None else None
+    secondary = (
+        np.empty(n_resamples, dtype=np.float64) if paired_with is not None else None
+    )
 
     done = 0
     while done < n_resamples:
         take = min(block_size, n_resamples - done)
         counts = rng.multinomial(n, probabilities, size=take).astype(np.float64)
-        primary[done:done + take] = _multinomial_rga(y, yhat, counts)
+        primary[done : done + take] = _multinomial_rga(y, yhat, counts)
         if secondary is not None:
-            secondary[done:done + take] = _multinomial_rga(y, paired_with, counts)
+            secondary[done : done + take] = _multinomial_rga(y, paired_with, counts)
         done += take
 
     if secondary is not None:
@@ -270,6 +298,7 @@ def bootstrap_values(
 # --------------------------------------------------------------------------
 # results
 # --------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class RGAEstimate:
@@ -374,6 +403,7 @@ class RGAComparison:
 # --------------------------------------------------------------------------
 # public API
 # --------------------------------------------------------------------------
+
 
 def _interval_from_replicates(
     replicates: np.ndarray,
@@ -533,8 +563,7 @@ def rga_ci(
         )
 
     raise InputError(
-        f"unknown method {method!r}; expected 'jackknife', 'influence' or "
-        "'bootstrap'."
+        f"unknown method {method!r}; expected 'jackknife', 'influence' or 'bootstrap'."
     )
 
 
@@ -583,8 +612,7 @@ def rga_compare(
         delta = pseudo_a - pseudo_b
         if not np.all(np.isfinite(delta)):
             raise UndefinedMetricError(
-                "some delete-one samples make RGA undefined; use "
-                "method='influence'."
+                "some delete-one samples make RGA undefined; use method='influence'."
             )
         standard_error = float(np.std(delta, ddof=1)) / math.sqrt(n)
     elif method == "influence":
@@ -592,8 +620,11 @@ def rga_compare(
         standard_error = float(np.std(delta, ddof=1)) / math.sqrt(n)
     elif method == "bootstrap":
         rep_a, rep_b = bootstrap_values(
-            y_arr, a_arr, n_resamples=n_resamples,
-            random_state=random_state, paired_with=b_arr,
+            y_arr,
+            a_arr,
+            n_resamples=n_resamples,
+            random_state=random_state,
+            paired_with=b_arr,
         )
         diffs = rep_a - rep_b
         diffs = diffs[np.isfinite(diffs)]

@@ -21,8 +21,11 @@ def test_removing_every_predictor_gives_exactly_one_half(fitted_logit):
     """
     context = fitted_logit
     result = rge_group(
-        context["X_train"], context["X_test"], context["model"],
-        list(context["X_train"].columns), yhat=context["yhat"],
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        list(context["X_train"].columns),
+        yhat=context["yhat"],
     )
     assert result.rge == pytest.approx(0.5, abs=1e-9)
 
@@ -30,8 +33,12 @@ def test_removing_every_predictor_gives_exactly_one_half(fitted_logit):
 def test_normalization_restores_the_unit_scale(fitted_logit):
     context = fitted_logit
     result = rge_group(
-        context["X_train"], context["X_test"], context["model"],
-        list(context["X_train"].columns), yhat=context["yhat"], normalize=True,
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        list(context["X_train"].columns),
+        yhat=context["yhat"],
+        normalize=True,
     )
     assert result.rge == pytest.approx(1.0, abs=1e-9)
 
@@ -41,8 +48,11 @@ def test_an_irrelevant_predictor_scores_near_zero(fitted_logit):
     results = {
         item.variables[0]: item.rge
         for item in rge(
-            context["X_train"], context["X_test"], context["model"],
-            ["dti", "noise"], yhat=context["yhat"],
+            context["X_train"],
+            context["X_test"],
+            context["model"],
+            ["dti", "noise"],
+            yhat=context["yhat"],
         )
     }
     assert results["noise"] < 0.02
@@ -52,8 +62,11 @@ def test_an_irrelevant_predictor_scores_near_zero(fitted_logit):
 def test_results_are_sorted_descending(fitted_logit):
     context = fitted_logit
     results = rge(
-        context["X_train"], context["X_test"], context["model"],
-        ["noise", "dti", "age"], yhat=context["yhat"],
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        ["noise", "dti", "age"],
+        yhat=context["yhat"],
     )
     assert [item.rge for item in results] == sorted(
         [item.rge for item in results], reverse=True
@@ -76,14 +89,20 @@ def test_group_rge_is_not_monotone(fitted_logit):
     context = fitted_logit
     single = {
         name: rge_group(
-            context["X_train"], context["X_test"], context["model"],
-            [name], yhat=context["yhat"],
+            context["X_train"],
+            context["X_test"],
+            context["model"],
+            [name],
+            yhat=context["yhat"],
         ).rge
         for name in ("income", "income_copy")
     }
     together = rge_group(
-        context["X_train"], context["X_test"], context["model"],
-        ["income", "income_copy"], yhat=context["yhat"],
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        ["income", "income_copy"],
+        yhat=context["yhat"],
     ).rge
     assert together < min(single.values())
 
@@ -99,8 +118,11 @@ def test_rge_can_exceed_one_half(fitted_logit):
     """
     context = fitted_logit
     value = rge_group(
-        context["X_train"], context["X_test"], context["model"],
-        ["income"], yhat=context["yhat"],
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        ["income"],
+        yhat=context["yhat"],
     ).rge
     assert value > 0.5
 
@@ -118,17 +140,23 @@ def test_collinear_predictors_mask_each_other(fitted_logit):
     individual = {
         item.variables[0]: item.rge
         for item in rge(
-            context["X_train"], context["X_test"], context["model"],
-            ["income", "income_copy", "noise"], yhat=context["yhat"],
+            context["X_train"],
+            context["X_test"],
+            context["model"],
+            ["income", "income_copy", "noise"],
+            yhat=context["yhat"],
         )
     }
     joint = rge_group(
-        context["X_train"], context["X_test"], context["model"],
-        ["income", "income_copy"], yhat=context["yhat"],
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        ["income", "income_copy"],
+        yhat=context["yhat"],
     ).rge
-    assert individual["income"] > 0.5           # looks dominant alone
-    assert joint < 0.15                         # looks negligible together
-    assert joint < individual["income_copy"]    # and below either member
+    assert individual["income"] > 0.5  # looks dominant alone
+    assert joint < 0.15  # looks negligible together
+    assert joint < individual["income_copy"]  # and below either member
 
 
 def test_shapley_is_efficient(fitted_logit):
@@ -139,8 +167,12 @@ def test_shapley_is_efficient(fitted_logit):
     """
     context = fitted_logit
     result = rge_shapley(
-        context["X_train"], context["X_test"], context["model"],
-        list(context["X_train"].columns), yhat=context["yhat"], normalize=True,
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        list(context["X_train"].columns),
+        yhat=context["yhat"],
+        normalize=True,
     )
     assert sum(result.values.values()) == pytest.approx(result.total, abs=1e-9)
     assert result.total == pytest.approx(1.0, abs=1e-9)
@@ -152,8 +184,12 @@ def test_shapley_efficiency_holds_on_a_subset_too(fitted_logit):
     context = fitted_logit
     columns = ["income", "dti", "age", "noise"]
     result = rge_shapley(
-        context["X_train"], context["X_test"], context["model"], columns,
-        yhat=context["yhat"], normalize=True,
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        columns,
+        yhat=context["yhat"],
+        normalize=True,
     )
     assert sum(result.values.values()) == pytest.approx(result.total, abs=1e-9)
 
@@ -176,12 +212,20 @@ def test_shapley_sampling_approximates_the_exact_values(fitted_logit):
     context = fitted_logit
     columns = ["income", "dti", "age", "noise"]
     exact = rge_shapley(
-        context["X_train"], context["X_test"], context["model"], columns,
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        columns,
         yhat=context["yhat"],
     )
     sampled = rge_shapley(
-        context["X_train"], context["X_test"], context["model"], columns,
-        yhat=context["yhat"], n_permutations=400, random_state=0,
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        columns,
+        yhat=context["yhat"],
+        n_permutations=400,
+        random_state=0,
     )
     assert not sampled.exact
     for column in columns:
@@ -194,8 +238,13 @@ def test_removal_methods_all_run_and_rank_signal_above_noise(fitted_logit, metho
     results = {
         item.variables[0]: item.rge
         for item in rge(
-            context["X_train"], context["X_test"], context["model"],
-            ["dti", "noise"], yhat=context["yhat"], method=method, random_state=0,
+            context["X_train"],
+            context["X_test"],
+            context["model"],
+            ["dti", "noise"],
+            yhat=context["yhat"],
+            method=method,
+            random_state=0,
         )
     }
     assert results["dti"] > results["noise"]
@@ -207,11 +256,13 @@ def test_retrain_method_matches_the_papers_r_code(rng):
     from sklearn.linear_model import LinearRegression
 
     n = 500
-    frame = pd.DataFrame({
-        "x1": rng.normal(size=n),
-        "x2": rng.normal(size=n),
-        "x3": rng.normal(size=n),
-    })
+    frame = pd.DataFrame(
+        {
+            "x1": rng.normal(size=n),
+            "x2": rng.normal(size=n),
+            "x3": rng.normal(size=n),
+        }
+    )
     target = 3 * frame["x1"] + 0.05 * frame["x3"] + rng.normal(0, 0.5, n)
     full = LinearRegression().fit(frame, target)
 
@@ -221,7 +272,12 @@ def test_retrain_method_matches_the_papers_r_code(rng):
     results = {
         item.variables[0]: item.rge
         for item in rge(
-            frame, frame, full, ["x1", "x3"], method="retrain", refit=refit,
+            frame,
+            frame,
+            full,
+            ["x1", "x3"],
+            method="retrain",
+            refit=refit,
         )
     }
     assert results["x1"] > results["x3"]
@@ -232,8 +288,12 @@ def test_retrain_without_refit_is_a_clear_error(fitted_logit):
     context = fitted_logit
     with pytest.raises(InputError, match="needs a `refit` callable"):
         rge(
-            context["X_train"], context["X_test"], context["model"], ["dti"],
-            yhat=context["yhat"], method="retrain",
+            context["X_train"],
+            context["X_test"],
+            context["model"],
+            ["dti"],
+            yhat=context["yhat"],
+            method="retrain",
         )
 
 
@@ -242,10 +302,9 @@ def test_string_columns_are_handled_not_crashed(credit_frame, rng):
     frame, _target = credit_frame
 
     def model(X):
-        return (
-            np.log(np.asarray(X["income"], dtype=float))
-            + (np.asarray(X["region"]) == "north").astype(float)
-        )
+        return np.log(np.asarray(X["income"], dtype=float)) + (
+            np.asarray(X["region"]) == "north"
+        ).astype(float)
 
     results = rge(frame, frame, model, ["region", "income"])
     assert all(np.isfinite(item.rge) for item in results)
@@ -256,11 +315,17 @@ def test_yhat_is_actually_used(fitted_logit, rng):
     """Passing a different yhat must change the answer."""
     context = fitted_logit
     real = rge(
-        context["X_train"], context["X_test"], context["model"], ["dti"],
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        ["dti"],
         yhat=context["yhat"],
     )[0].rge
     junk = rge(
-        context["X_train"], context["X_test"], context["model"], ["dti"],
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        ["dti"],
         yhat=rng.normal(size=len(context["X_test"])),
     )[0].rge
     assert real != pytest.approx(junk, abs=1e-6)
@@ -269,8 +334,12 @@ def test_yhat_is_actually_used(fitted_logit, rng):
 def test_confidence_interval_brackets_the_estimate(fitted_logit):
     context = fitted_logit
     result = rge(
-        context["X_train"], context["X_test"], context["model"], ["income"],
-        yhat=context["yhat"], ci=True,
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        ["income"],
+        yhat=context["yhat"],
+        ci=True,
     )[0]
     low, high = result.rge_ci
     assert low < result.rge < high
@@ -280,7 +349,10 @@ def test_unknown_column_is_reported_with_the_available_ones(fitted_logit):
     context = fitted_logit
     with pytest.raises(InputError, match="not in the data"):
         rge(
-            context["X_train"], context["X_test"], context["model"], ["nope"],
+            context["X_train"],
+            context["X_test"],
+            context["model"],
+            ["nope"],
             yhat=context["yhat"],
         )
 
@@ -290,8 +362,11 @@ def test_numpy_input_gives_an_actionable_message(fitted_logit):
     context = fitted_logit
     with pytest.raises(InputError, match="no column labels"):
         rge(
-            context["X_train"].to_numpy(), context["X_test"].to_numpy(),
-            context["model"], ["income"], yhat=context["yhat"],
+            context["X_train"].to_numpy(),
+            context["X_test"].to_numpy(),
+            context["model"],
+            ["income"],
+            yhat=context["yhat"],
         )
 
 
@@ -299,8 +374,12 @@ def test_inputs_are_not_mutated(fitted_logit):
     context = fitted_logit
     before = context["X_test"].copy()
     rge(
-        context["X_train"], context["X_test"], context["model"],
-        ["income", "dti"], yhat=context["yhat"], group=True,
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        ["income", "dti"],
+        yhat=context["yhat"],
+        group=True,
     )
     assert context["X_test"].equals(before)
 
@@ -346,13 +425,20 @@ def test_permute_accepts_a_generator_as_random_state(rng):
     raised ``TypeError: int() argument must be...`` before reaching the model.
     """
     pd = pytest.importorskip("pandas")
-    frame = pd.DataFrame({
-        "a": rng.normal(size=200),
-        "b": rng.normal(size=200),
-    })
+    frame = pd.DataFrame(
+        {
+            "a": rng.normal(size=200),
+            "b": rng.normal(size=200),
+        }
+    )
     results = rge(
-        frame, frame, lambda X: X["a"] + X["b"], ["a", "b"],
-        group=True, method="permute", random_state=np.random.default_rng(3),
+        frame,
+        frame,
+        lambda X: X["a"] + X["b"],
+        ["a", "b"],
+        group=True,
+        method="permute",
+        random_state=np.random.default_rng(3),
     )
     assert len(results) == 1
 
@@ -361,11 +447,13 @@ def test_group_permutation_keeps_the_rows_intact(rng):
     """Every removed column must still come from the same original row."""
     pd = pytest.importorskip("pandas")
     n = 300
-    frame = pd.DataFrame({
-        "a": np.arange(n, dtype=float),
-        "b": np.arange(n, dtype=float) * -1.0,   # b == -a, row by row
-        "c": rng.normal(size=n),
-    })
+    frame = pd.DataFrame(
+        {
+            "a": np.arange(n, dtype=float),
+            "b": np.arange(n, dtype=float) * -1.0,  # b == -a, row by row
+            "c": rng.normal(size=n),
+        }
+    )
 
     seen: list[bool] = []
 

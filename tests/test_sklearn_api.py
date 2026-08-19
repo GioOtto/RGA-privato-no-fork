@@ -47,8 +47,10 @@ def test_scorer_drives_grid_search(classification):
 
     X, y = classification
     search = GridSearchCV(
-        LogisticRegression(max_iter=500), {"C": [0.01, 1.0, 100.0]},
-        scoring=rga_scorer, cv=3,
+        LogisticRegression(max_iter=500),
+        {"C": [0.01, 1.0, 100.0]},
+        scoring=rga_scorer,
+        cv=3,
     ).fit(X, y)
     assert search.best_score_ > 0.5
     assert search.best_params_["C"] in (0.01, 1.0, 100.0)

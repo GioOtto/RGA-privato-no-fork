@@ -72,9 +72,9 @@ def test_fairness_tolerates_a_level_missing_from_the_test_split(rng):
     `ValueError: Found array with 0 sample(s)` from inside the estimator."""
     y = rng.binomial(1, 0.4, 500).astype(float)
     scores = rng.normal(y, 1.0, 500)
-    groups = np.array(["present"] * 500)          # the other level never appears
+    groups = np.array(["present"] * 500)  # the other level never appears
     result = rga_parity(y, scores, groups, min_group_size=0)
-    assert result.gap is None                      # reported, not crashed
+    assert result.gap is None  # reported, not crashed
     assert len(result.groups) == 1
 
 
@@ -125,10 +125,12 @@ def test_string_column_does_not_crash_variable_removal(rng):
     CategoricalDtype, so an object/string column reached `.mean()` and raised
     `TypeError: Could not perform reduction 'mean' with string dtype`."""
     pd = pytest.importorskip("pandas")
-    frame = pd.DataFrame({
-        "num": rng.normal(size=200),
-        "txt": rng.choice(["a", "b", "c"], 200),
-    })
+    frame = pd.DataFrame(
+        {
+            "num": rng.normal(size=200),
+            "txt": rng.choice(["a", "b", "c"], 200),
+        }
+    )
 
     def model(X):
         return np.asarray(X["num"]) + (np.asarray(X["txt"]) == "a")
@@ -142,8 +144,9 @@ def test_numpy_arrays_get_an_honest_error(rng):
     array, which points at the wrong problem: the array has no column names."""
     pytest.importorskip("sklearn")
     with pytest.raises(InputError, match="no column labels"):
-        rge(rng.normal(size=(50, 3)), rng.normal(size=(50, 3)),
-            lambda X: X[:, 0], ["a"])
+        rge(
+            rng.normal(size=(50, 3)), rng.normal(size=(50, 3)), lambda X: X[:, 0], ["a"]
+        )
 
 
 def test_removing_all_predictors_is_exactly_one_half(fitted_logit):
@@ -152,8 +155,11 @@ def test_removing_all_predictors_is_exactly_one_half(fitted_logit):
     the reachable scale."""
     context = fitted_logit
     value = rge_group(
-        context["X_train"], context["X_test"], context["model"],
-        list(context["X_train"].columns), yhat=context["yhat"],
+        context["X_train"],
+        context["X_test"],
+        context["model"],
+        list(context["X_train"].columns),
+        yhat=context["yhat"],
     ).rge
     assert value == pytest.approx(0.5, abs=1e-9)
 
@@ -165,8 +171,13 @@ def test_rgr_default_magnitude_is_not_a_neutral_choice(fitted_logit):
 
     context = fitted_logit
     values = [
-        rgr(context["X_test"], context["model"], ["income"],
-            yhat=context["yhat"], magnitude=m)[0].rgr
+        rgr(
+            context["X_test"],
+            context["model"],
+            ["income"],
+            yhat=context["yhat"],
+            magnitude=m,
+        )[0].rgr
         for m in (0.01, 0.5)
     ]
     assert values[0] - values[1] > 0.15

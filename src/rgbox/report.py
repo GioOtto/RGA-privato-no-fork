@@ -75,10 +75,14 @@ class RGBoxReport:
         add("")
         add("| metric | value | 95% CI |")
         add("|---|---|---|")
-        add(f"| RGA | {rga_block['rga']:.4f} | "
-            f"{rga_block['ci_low']:.4f} - {rga_block['ci_high']:.4f} |")
-        add(f"| Gini (2*RGA-1) | {acc['gini']:+.4f} | "
-            f"{acc['gini_ci_low']:+.4f} - {acc['gini_ci_high']:+.4f} |")
+        add(
+            f"| RGA | {rga_block['rga']:.4f} | "
+            f"{rga_block['ci_low']:.4f} - {rga_block['ci_high']:.4f} |"
+        )
+        add(
+            f"| Gini (2*RGA-1) | {acc['gini']:+.4f} | "
+            f"{acc['gini_ci_low']:+.4f} - {acc['gini_ci_high']:+.4f} |"
+        )
         for name, value in acc.get("reference_metrics", {}).items():
             if value is not None:
                 add(f"| {name} | {value:+.4f} | |")
@@ -91,8 +95,10 @@ class RGBoxReport:
             add("|---|---|---|")
             total = sum(row["rge"] for row in self.explainability) or 1.0
             for row in self.explainability:
-                add(f"| {row['label']} | {row['rge']:.4f} | "
-                    f"{100 * row['rge'] / total:.1f}% |")
+                add(
+                    f"| {row['label']} | {row['rge']:.4f} | "
+                    f"{100 * row['rge'] / total:.1f}% |"
+                )
             add("")
 
         if self.robustness:
@@ -104,8 +110,10 @@ class RGBoxReport:
                 worst = min(
                     zip(row["magnitudes"], row["rgr"]), key=lambda pair: pair[1]
                 )
-                add(f"| {row['label']} | {row['aurgr']:.4f} | "
-                    f"magnitude {worst[0]:g} -> RGR {worst[1]:.4f} |")
+                add(
+                    f"| {row['label']} | {row['aurgr']:.4f} | "
+                    f"magnitude {worst[0]:g} -> RGR {worst[1]:.4f} |"
+                )
             add("")
 
         if self.fairness:
@@ -121,43 +129,54 @@ class RGBoxReport:
                     if group["rga"] is None:
                         add(f"| {group['group']} | {group['n']} | - | - | no |")
                     else:
-                        add(f"| {group['group']} | {group['n']} | "
+                        add(
+                            f"| {group['group']} | {group['n']} | "
                             f"{group['rga']:.4f} | {group['ci_low']:.4f} - "
                             f"{group['ci_high']:.4f} | "
-                            f"{'yes' if group['included'] else 'no'} |")
+                            f"{'yes' if group['included'] else 'no'} |"
+                        )
                 add("")
                 if parity["gap"] is not None:
                     ci = ""
                     if parity["gap_ci_low"] is not None:
-                        ci = (f" (95% CI {parity['gap_ci_low']:.4f} - "
-                              f"{parity['gap_ci_high']:.4f})")
-                    add(f"**RGA parity gap: {parity['gap']:.4f}{ci}**, "
+                        ci = (
+                            f" (95% CI {parity['gap_ci_low']:.4f} - "
+                            f"{parity['gap_ci_high']:.4f})"
+                        )
+                    add(
+                        f"**RGA parity gap: {parity['gap']:.4f}{ci}**, "
                         f"p = {parity['gap_p_value']:.4g} "
-                        f"(family-wise, {parity['multiplicity']})")
+                        f"(family-wise, {parity['multiplicity']})"
+                    )
                     if parity.get("gap_bias_corrected") is not None:
                         add("")
-                        add(f"Bias-corrected gap: "
-                            f"{parity['gap_bias_corrected']:.4f}")
+                        add(f"Bias-corrected gap: {parity['gap_bias_corrected']:.4f}")
                     # Naming the uncorrected value is what makes the correction
                     # auditable: a reader who only ever sees the adjusted number
                     # cannot tell how much of it was the multiplicity penalty.
                     if parity.get("gap_p_value_unadjusted") is not None:
                         add("")
-                        add(f"Uncorrected p (selects the widest of "
+                        add(
+                            f"Uncorrected p (selects the widest of "
                             f"{len(parity['pairwise'])} pairs, so it "
                             f"over-rejects): "
-                            f"{parity['gap_p_value_unadjusted']:.4g}")
+                            f"{parity['gap_p_value_unadjusted']:.4g}"
+                        )
                     add("")
                     add(f"> {parity['gap_ci_note']}")
                     add("")
             if self.fairness.get("rgf"):
                 block = self.fairness["rgf"]
-                add(f"RGF (ranking reliance on `{block['attribute']}`): "
-                    f"{block['rgf']:.4f} - RGE {block['rge']:.4f}")
+                add(
+                    f"RGF (ranking reliance on `{block['attribute']}`): "
+                    f"{block['rgf']:.4f} - RGE {block['rge']:.4f}"
+                )
                 add("")
-            add("> RGA parity is *AUC parity*: equal ranking quality per group. "
+            add(
+                "> RGA parity is *AUC parity*: equal ranking quality per group. "
                 "It is not demographic parity or equalised odds, and does not "
-                "imply either. Report it alongside outcome-based criteria.")
+                "imply either. Report it alongside outcome-based criteria."
+            )
             add("")
 
         if self.warnings:
@@ -263,8 +282,12 @@ def rgbox_report(
         )
 
     accuracy = accuracy_report(
-        y, yhat, method=ci_method, level=level,
-        n_resamples=n_resamples, random_state=random_state,
+        y,
+        yhat,
+        method=ci_method,
+        level=level,
+        n_resamples=n_resamples,
+        random_state=random_state,
     ).to_dict()
 
     explainability: list[dict[str, Any]] = []
@@ -272,9 +295,15 @@ def rgbox_report(
         explainability = [
             item.to_dict()
             for item in rge(
-                X_train, X_test, model, list(variables), yhat=yhat,
-                method=rge_method, pos_label=pos_label,
-                greater_is_better=greater_is_better, random_state=random_state,
+                X_train,
+                X_test,
+                model,
+                list(variables),
+                yhat=yhat,
+                method=rge_method,
+                pos_label=pos_label,
+                greater_is_better=greater_is_better,
+                random_state=random_state,
             )
         ]
     elif variables:
@@ -285,9 +314,14 @@ def rgbox_report(
         robustness = [
             curve.to_dict()
             for curve in rgr_curve(
-                X_test, model, list(variables), yhat=yhat,
-                kind=perturbation_kind, pos_label=pos_label,
-                greater_is_better=greater_is_better, random_state=random_state,
+                X_test,
+                model,
+                list(variables),
+                yhat=yhat,
+                kind=perturbation_kind,
+                pos_label=pos_label,
+                greater_is_better=greater_is_better,
+                random_state=random_state,
             )
         ]
     else:
@@ -305,19 +339,36 @@ def rgbox_report(
             else labels_from_dummies(X_test, protected_columns)
         )
         block["rga_parity"] = rga_parity(
-            y, yhat, group_values, min_group_size=min_group_size,
-            level=level, method=ci_method, n_resamples=n_resamples,
-            random_state=random_state, attribute=protected,
+            y,
+            yhat,
+            group_values,
+            min_group_size=min_group_size,
+            level=level,
+            method=ci_method,
+            n_resamples=n_resamples,
+            random_state=random_state,
+            attribute=protected,
         ).to_dict()
         if X_train is not None:
             block["rgf"] = rgf(
-                X_train, X_test, model, protected, yhat=yhat, method=rge_method,
-                pos_label=pos_label, greater_is_better=greater_is_better,
+                X_train,
+                X_test,
+                model,
+                protected,
+                yhat=yhat,
+                method=rge_method,
+                pos_label=pos_label,
+                greater_is_better=greater_is_better,
                 random_state=random_state,
             )
             block["proxy_leakage"] = proxy_leakage(
-                X_train, X_test, model, protected, yhat=yhat,
-                pos_label=pos_label, greater_is_better=greater_is_better,
+                X_train,
+                X_test,
+                model,
+                protected,
+                yhat=yhat,
+                pos_label=pos_label,
+                greater_is_better=greater_is_better,
                 random_state=random_state,
             )
         gap = block["rga_parity"]["gap"]
@@ -342,6 +393,10 @@ def rgbox_report(
         "variables": list(variables) if variables else [],
     }
     return RGBoxReport(
-        metadata=metadata, accuracy=accuracy, explainability=explainability,
-        robustness=robustness, fairness=fairness, warnings=warnings,
+        metadata=metadata,
+        accuracy=accuracy,
+        explainability=explainability,
+        robustness=robustness,
+        fairness=fairness,
+        warnings=warnings,
     )

@@ -46,8 +46,13 @@ def compute_rgr_values(
     area under the whole curve, which has no such free parameter.
     """
     results = _rgr(
-        xtest, model, list(variables), yhat=yhat,
-        magnitude=perturbation_percentage, kind="tailswap", group=group,
+        xtest,
+        model,
+        list(variables),
+        yhat=yhat,
+        magnitude=perturbation_percentage,
+        kind="tailswap",
+        group=group,
     )
     if group:
         return pd.DataFrame(

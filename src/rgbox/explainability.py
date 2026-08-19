@@ -162,9 +162,11 @@ class RGEResult:
 
     @property
     def label(self) -> str:
-        return self.variables[0] if len(self.variables) == 1 else "{" + ", ".join(
-            str(v) for v in self.variables
-        ) + "}"
+        return (
+            self.variables[0]
+            if len(self.variables) == 1
+            else "{" + ", ".join(str(v) for v in self.variables) + "}"
+        )
 
     def to_dict(self) -> dict[str, Any]:
         record = {
@@ -249,7 +251,10 @@ def _reduced_scores(
     reduced = X_test
     for column in columns:
         reduced = replace_column(
-            reduced, column, X_train=X_train, method=method,
+            reduced,
+            column,
+            X_train=X_train,
+            method=method,
             random_state=random_state,
         )
     return score_fn(reduced)
@@ -357,8 +362,12 @@ def rge(
         estimate = None
         if ci:
             estimate = rga_ci(
-                full, reduced, method=ci_method, level=level,
-                random_state=random_state, n_resamples=n_resamples,
+                full,
+                reduced,
+                method=ci_method,
+                level=level,
+                random_state=random_state,
+                n_resamples=n_resamples,
             )
             reduced_rga = estimate.estimate
         else:
@@ -495,8 +504,11 @@ def rge_shapley(
                         value(frozen | {column}) - value(frozen)
                     )
         return ShapleyResult(
-            values=shapley, total=value(frozenset(columns)), exact=True,
-            n_permutations=None, normalized=normalize,
+            values=shapley,
+            total=value(frozenset(columns)),
+            exact=True,
+            n_permutations=None,
+            normalized=normalize,
         )
 
     draws = n_permutations if n_permutations is not None else 200
@@ -513,6 +525,9 @@ def rge_shapley(
     for column in columns:
         shapley[column] /= draws
     return ShapleyResult(
-        values=shapley, total=value(frozenset(columns)), exact=False,
-        n_permutations=draws, normalized=normalize,
+        values=shapley,
+        total=value(frozenset(columns)),
+        exact=False,
+        n_permutations=draws,
+        normalized=normalize,
     )

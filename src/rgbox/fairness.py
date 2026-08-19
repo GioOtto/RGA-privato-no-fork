@@ -281,9 +281,9 @@ def labels_from_dummies(
         off them would be arbitrary.
     """
     columns = resolve_columns(columns, X, "columns")
-    block = np.column_stack([
-        as_1d_float(X[column], f"X[{column!r}]") for column in columns
-    ])
+    block = np.column_stack(
+        [as_1d_float(X[column], f"X[{column!r}]") for column in columns]
+    )
     if not np.all(np.isin(block, (0.0, 1.0))):
         raise InputError(
             f"columns {columns!r} are not a 0/1 encoding, so they cannot be "
@@ -363,25 +363,49 @@ def rga_parity(
     for label, mask in _group_masks(group_values):
         size = int(mask.sum())
         if size < 3:
-            records.append(GroupRGA(label, size, None, None, None, None, False,
-                                    "fewer than 3 observations"))
+            records.append(
+                GroupRGA(
+                    label,
+                    size,
+                    None,
+                    None,
+                    None,
+                    None,
+                    False,
+                    "fewer than 3 observations",
+                )
+            )
             excluded.append(label)
             continue
         try:
             estimate = rga_ci(
-                y_arr[mask], yhat_arr[mask], method=method, level=level,
-                n_resamples=n_resamples, random_state=random_state,
+                y_arr[mask],
+                yhat_arr[mask],
+                method=method,
+                level=level,
+                n_resamples=n_resamples,
+                random_state=random_state,
             )
         except (UndefinedMetricError, InsufficientDataError) as exc:
-            records.append(GroupRGA(label, size, None, None, None, None, False,
-                                    str(exc).split(".")[0]))
+            records.append(
+                GroupRGA(
+                    label, size, None, None, None, None, False, str(exc).split(".")[0]
+                )
+            )
             excluded.append(label)
             continue
         included = size >= min_group_size
         records.append(
-            GroupRGA(label, size, estimate.estimate, estimate.standard_error,
-                     estimate.ci_low, estimate.ci_high, included,
-                     "" if included else f"n < min_group_size ({min_group_size})")
+            GroupRGA(
+                label,
+                size,
+                estimate.estimate,
+                estimate.standard_error,
+                estimate.ci_low,
+                estimate.ci_high,
+                included,
+                "" if included else f"n < min_group_size ({min_group_size})",
+            )
         )
         if included:
             eligible[label] = estimate
@@ -393,9 +417,16 @@ def rga_parity(
 
     if len(eligible) < 2:
         return ParityResult(
-            groups=records, gap=None, gap_ci=None, gap_p_value=None,
-            best_group=None, worst_group=None, level=level,
-            method=method, attribute=attribute, excluded=excluded,
+            groups=records,
+            gap=None,
+            gap_ci=None,
+            gap_p_value=None,
+            best_group=None,
+            worst_group=None,
+            level=level,
+            method=method,
+            attribute=attribute,
+            excluded=excluded,
         )
 
     labels = list(eligible)
@@ -422,22 +453,26 @@ def rga_parity(
 
     pairwise: list[dict[str, Any]] = []
     for i, first in enumerate(labels):
-        for second in labels[i + 1:]:
+        for second in labels[i + 1 :]:
             difference = point[first] - point[second]
-            se = float(np.hypot(
-                eligible[first].standard_error, eligible[second].standard_error
-            ))
+            se = float(
+                np.hypot(
+                    eligible[first].standard_error, eligible[second].standard_error
+                )
+            )
             statistic = difference / se if se > 0 else 0.0
-            pairwise.append({
-                "group_a": first,
-                "group_b": second,
-                "difference": difference,
-                "standard_error": se,
-                "ci_low": difference - z_crit * se,
-                "ci_high": difference + z_crit * se,
-                "p_value": 2.0 * (1.0 - _normal_cdf(abs(statistic))),
-                "p_value_adjusted": adjusted(statistic),
-            })
+            pairwise.append(
+                {
+                    "group_a": first,
+                    "group_b": second,
+                    "difference": difference,
+                    "standard_error": se,
+                    "ci_low": difference - z_crit * se,
+                    "ci_high": difference + z_crit * se,
+                    "p_value": 2.0 * (1.0 - _normal_cdf(abs(statistic))),
+                    "p_value_adjusted": adjusted(statistic),
+                }
+            )
 
     # Stratified bootstrap for the max-min gap.
     draws = np.empty(n_resamples)
@@ -469,21 +504,26 @@ def rga_parity(
 
     # The headline p-value is for the widest pair, which is the gap.
     widest = next(
-        record for record in pairwise
+        record
+        for record in pairwise
         if {record["group_a"], record["group_b"]} == {best, worst}
     )
 
     return ParityResult(
-        groups=records, gap=gap, gap_ci=gap_ci,
+        groups=records,
+        gap=gap,
+        gap_ci=gap_ci,
         gap_p_value=widest["p_value_adjusted"],
-        best_group=best, worst_group=worst, level=level,
-        method=f"{method} + stratified bootstrap", attribute=attribute,
-        pairwise=pairwise, excluded=excluded,
+        best_group=best,
+        worst_group=worst,
+        level=level,
+        method=f"{method} + stratified bootstrap",
+        attribute=attribute,
+        pairwise=pairwise,
+        excluded=excluded,
         gap_bias_corrected=gap_bias_corrected,
         gap_p_value_unadjusted=widest["p_value"],
-        multiplicity=(
-            f"max-T over {len(pairwise)} pair(s), {n_resamples} draws"
-        ),
+        multiplicity=(f"max-T over {len(pairwise)} pair(s), {n_resamples} draws"),
     )
 
 
@@ -535,9 +575,18 @@ def rgf(
 
     columns = resolve_columns(protected, X_test, "protected")
     results = _rge(
-        X_train, X_test, model, columns, yhat=yhat, method=method,
-        group=True, normalize=normalize, refit=refit, pos_label=pos_label,
-        greater_is_better=greater_is_better, random_state=random_state,
+        X_train,
+        X_test,
+        model,
+        columns,
+        yhat=yhat,
+        method=method,
+        group=True,
+        normalize=normalize,
+        refit=refit,
+        pos_label=pos_label,
+        greater_is_better=greater_is_better,
+        random_state=random_state,
     )
     result = results[0]
     return {
@@ -605,8 +654,14 @@ def proxy_leakage(
         try:
             values = as_1d_float(X_test[column], str(column))
         except InputError:
-            rows.append({"variable": column, "rga": None, "level": None,
-                         "note": "non-numeric column, skipped"})
+            rows.append(
+                {
+                    "variable": column,
+                    "rga": None,
+                    "level": None,
+                    "note": "non-numeric column, skipped",
+                }
+            )
             continue
         worst: tuple[Any, float, float] | None = None
         for level, target in protected_values.items():
@@ -618,15 +673,23 @@ def proxy_leakage(
             if worst is None or leakage > worst[2]:
                 worst = (level, score, leakage)
         if worst is None:
-            rows.append({"variable": column, "rga": None, "level": None,
-                         "note": "protected attribute is constant here"})
+            rows.append(
+                {
+                    "variable": column,
+                    "rga": None,
+                    "level": None,
+                    "note": "protected attribute is constant here",
+                }
+            )
             continue
-        rows.append({
-            "variable": column,
-            "rga": worst[1],
-            "level": worst[0],
-            "leakage": worst[2],
-            "note": "",
-        })
+        rows.append(
+            {
+                "variable": column,
+                "rga": worst[1],
+                "level": worst[0],
+                "leakage": worst[2],
+                "note": "",
+            }
+        )
     rows.sort(key=lambda row: (row.get("leakage") is None, -(row.get("leakage") or 0)))
     return {"protected": protected, "proxies": rows}

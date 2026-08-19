@@ -30,8 +30,17 @@ def binary(rng):
 
 
 @pytest.fixture(
-    params=["continuous", "binary", "ties_y", "ties_yhat", "ties_both",
-            "counts", "negative", "skewed", "constant_yhat"]
+    params=[
+        "continuous",
+        "binary",
+        "ties_y",
+        "ties_yhat",
+        "ties_both",
+        "counts",
+        "negative",
+        "skewed",
+        "constant_yhat",
+    ]
 )
 def sample(request, rng):
     """A representative spread of (y, yhat) shapes, including degenerate ties."""
@@ -67,20 +76,18 @@ def credit_frame(rng):
     """
     pd = pytest.importorskip("pandas")
     n = 900
-    frame = pd.DataFrame({
-        "income": rng.lognormal(10.0, 0.6, n),
-        "age": rng.integers(21, 78, n).astype(float),
-        "dti": rng.beta(2, 5, n),
-        "noise": rng.normal(size=n),
-        "gender": rng.binomial(1, 0.45, n).astype(float),
-        "region": rng.choice(["north", "centre", "south"], n),
-    })
-    frame["income_copy"] = frame["income"] * (1 + rng.normal(0, 0.002, n))
-    linear = (
-        -0.9 * np.log(frame["income"])
-        + 4.0 * frame["dti"]
-        + 0.02 * frame["age"]
+    frame = pd.DataFrame(
+        {
+            "income": rng.lognormal(10.0, 0.6, n),
+            "age": rng.integers(21, 78, n).astype(float),
+            "dti": rng.beta(2, 5, n),
+            "noise": rng.normal(size=n),
+            "gender": rng.binomial(1, 0.45, n).astype(float),
+            "region": rng.choice(["north", "centre", "south"], n),
+        }
     )
+    frame["income_copy"] = frame["income"] * (1 + rng.normal(0, 0.002, n))
+    linear = -0.9 * np.log(frame["income"]) + 4.0 * frame["dti"] + 0.02 * frame["age"]
     linear = linear - linear.mean()
     target = rng.binomial(1, 1.0 / (1.0 + np.exp(-linear))).astype(float)
     return frame, target

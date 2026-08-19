@@ -82,9 +82,7 @@ def weighted_average_ranks(values: np.ndarray, weights: np.ndarray) -> np.ndarra
     return out
 
 
-def suffix_sums_strictly_greater(
-    values: np.ndarray, payload: np.ndarray
-) -> np.ndarray:
+def suffix_sums_strictly_greater(values: np.ndarray, payload: np.ndarray) -> np.ndarray:
     """``out[i] = sum of payload[j] over all j with values[j] > values[i]``.
 
     Ties are excluded, which is what the leave-one-out rank update needs.

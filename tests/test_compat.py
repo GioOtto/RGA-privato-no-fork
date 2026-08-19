@@ -49,8 +49,11 @@ def test_import_emits_a_fork_notice():
 def test_compute_rge_values_shape_and_dtype(fitted_logit):
     context = fitted_logit
     frame = compute_rge_values(
-        context["X_train"], context["X_test"], context["yhat"],
-        context["model"], ["income", "dti", "noise"],
+        context["X_train"],
+        context["X_test"],
+        context["yhat"],
+        context["model"],
+        ["income", "dti", "noise"],
     )
     assert isinstance(frame, pd.DataFrame)
     assert list(frame.columns) == ["RGE"]
@@ -62,8 +65,12 @@ def test_compute_rge_values_group_mode(fitted_logit):
     context = fitted_logit
     variables = ["income", "dti"]
     frame = compute_rge_values(
-        context["X_train"], context["X_test"], context["yhat"],
-        context["model"], variables, group=True,
+        context["X_train"],
+        context["X_test"],
+        context["yhat"],
+        context["model"],
+        variables,
+        group=True,
     )
     assert list(frame.index) == [str(variables)]
     assert frame.shape == (1, 1)
@@ -72,8 +79,11 @@ def test_compute_rge_values_group_mode(fitted_logit):
 def test_compute_rgr_values_shape(fitted_logit):
     context = fitted_logit
     frame = compute_rgr_values(
-        context["X_test"], context["yhat"], context["model"],
-        ["income", "dti"], perturbation_percentage=0.1,
+        context["X_test"],
+        context["yhat"],
+        context["model"],
+        ["income", "dti"],
+        perturbation_percentage=0.1,
     )
     assert list(frame.columns) == ["RGR"]
     assert frame["RGR"].is_monotonic_decreasing
@@ -89,15 +99,19 @@ def test_perturb_keeps_the_upstream_signature(rng):
 def test_imparity_is_a_float_that_prints_like_the_old_string(fitted_logit):
     context = fitted_logit
     result = compute_rga_parity(
-        context["X_train"], context["X_test"], context["y_test"],
-        context["yhat"], context["model"], "gender",
+        context["X_train"],
+        context["X_test"],
+        context["y_test"],
+        context["yhat"],
+        context["model"],
+        "gender",
     )
     assert isinstance(result, ImparityScore)
     assert isinstance(result, float)
     assert 0.0 <= result <= 1.0
-    assert result < 1.0                      # usable in a threshold check
+    assert result < 1.0  # usable in a threshold check
     assert "RGA-based imparity" in str(result)
-    assert "gorups" not in str(result)       # upstream typo, corrected
+    assert "gorups" not in str(result)  # upstream typo, corrected
     # And the full analysis is one attribute away.
     assert result.result.groups
     assert result.result.gap == pytest.approx(float(result))
@@ -107,8 +121,12 @@ def test_imparity_missing_protected_variable(fitted_logit):
     context = fitted_logit
     with pytest.raises(ValueError, match="is not in the variables"):
         compute_rga_parity(
-            context["X_train"], context["X_test"], context["y_test"],
-            context["yhat"], context["model"], "not_a_column",
+            context["X_train"],
+            context["X_test"],
+            context["y_test"],
+            context["yhat"],
+            context["model"],
+            "not_a_column",
         )
 
 
@@ -151,6 +169,11 @@ def test_check_accuracy_module_is_back(binary):
 def test_top_level_reexports():
     import safeaipackage
 
-    for name in ("rga", "compute_rge_values", "compute_rgr_values",
-                 "compute_rga_parity", "perturb"):
+    for name in (
+        "rga",
+        "compute_rge_values",
+        "compute_rgr_values",
+        "compute_rga_parity",
+        "perturb",
+    ):
         assert hasattr(safeaipackage, name)

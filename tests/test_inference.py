@@ -11,9 +11,7 @@ from rgbox.inference import bootstrap_values, influence_values, jackknife_values
 
 
 def naive_jackknife(y, yhat):
-    return np.array(
-        [rga(np.delete(y, k), np.delete(yhat, k)) for k in range(y.size)]
-    )
+    return np.array([rga(np.delete(y, k), np.delete(yhat, k)) for k in range(y.size)])
 
 
 def test_fast_jackknife_is_exact(sample):
@@ -67,14 +65,18 @@ def test_influence_standard_error_matches_delong(rng):
     def delong(y, scores):
         positives, negatives = scores[y == 1], scores[y == 0]
         m, n = positives.size, negatives.size
-        v10 = np.array([
-            (np.sum(p > negatives) + 0.5 * np.sum(p == negatives)) / n
-            for p in positives
-        ])
-        v01 = np.array([
-            (np.sum(positives > q) + 0.5 * np.sum(positives == q)) / m
-            for q in negatives
-        ])
+        v10 = np.array(
+            [
+                (np.sum(p > negatives) + 0.5 * np.sum(p == negatives)) / n
+                for p in positives
+            ]
+        )
+        v01 = np.array(
+            [
+                (np.sum(positives > q) + 0.5 * np.sum(positives == q)) / m
+                for q in negatives
+            ]
+        )
         return np.sqrt(np.var(v10, ddof=1) / m + np.var(v01, ddof=1) / n)
 
     for n in (200, 600, 2000):
@@ -130,8 +132,12 @@ def test_interval_kinds(continuous):
     y, yhat = continuous
     for kind in ("normal", "percentile", "basic", "bca"):
         estimate = rga_ci(
-            y, yhat, method="bootstrap", interval=kind,
-            n_resamples=800, random_state=1,
+            y,
+            yhat,
+            method="bootstrap",
+            interval=kind,
+            n_resamples=800,
+            random_state=1,
         )
         assert estimate.interval == kind
         assert estimate.ci_low < estimate.estimate < estimate.ci_high
@@ -150,6 +156,7 @@ def test_estimate_exposes_the_gini_scale(binary):
 
 
 # --------------------------------------------------------------- comparison
+
 
 def test_identical_scores_compare_as_a_dead_heat(binary):
     y, yhat = binary
@@ -185,9 +192,7 @@ def test_paired_comparison_beats_naive_interval_overlap(rng):
     a = shared + rng.normal(0, 0.05, 1500)
     b = shared + rng.normal(0, 0.05, 1500) - 0.02 * y
     paired = rga_compare(y, a, b).standard_error
-    independent = np.hypot(
-        rga_ci(y, a).standard_error, rga_ci(y, b).standard_error
-    )
+    independent = np.hypot(rga_ci(y, a).standard_error, rga_ci(y, b).standard_error)
     assert paired < 0.5 * independent
 
 
@@ -203,6 +208,7 @@ def test_comparison_methods_agree(rng):
 
 # -------------------------------------------------------------------- tests
 
+
 def test_permutation_test_rejects_a_real_signal(binary):
     y, yhat = binary
     assert rga_test(y, yhat)["p_value"] < 1e-4
@@ -211,8 +217,9 @@ def test_permutation_test_rejects_a_real_signal(binary):
 def test_permutation_test_is_calibrated_under_the_null(rng):
     """p-values must be roughly uniform when the score is pure noise."""
     p_values = [
-        rga_test(rng.normal(size=200), rng.normal(size=200),
-                 alternative="two-sided")["p_value"]
+        rga_test(rng.normal(size=200), rng.normal(size=200), alternative="two-sided")[
+            "p_value"
+        ]
         for _ in range(400)
     ]
     assert 0.02 <= np.mean(np.array(p_values) < 0.05) <= 0.10
