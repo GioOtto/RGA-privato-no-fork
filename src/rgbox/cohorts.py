@@ -78,7 +78,7 @@ from typing import Any
 
 import numpy as np
 
-from ._validation import as_1d_float, as_score_pair, check_level
+from ._validation import as_1d_float, as_score_pair, check_level, is_missing
 from .core import rga
 from .exceptions import InputError, UndefinedMetricError
 from .inference import rga_ci
@@ -92,7 +92,13 @@ class Cohort:
     """One cohort: how it is defined, how big it is, how the model does on it."""
 
     conditions: tuple[str, ...]
-    mask: np.ndarray = field(repr=False)
+    # compare=False: a frozen dataclass derives __eq__ and __hash__ from its
+    # fields, and an ndarray field poisons both - `a == b` raises on the
+    # ambiguous array truth value and hash() raises on unhashability, which
+    # also takes out any CohortSearch holding a list of these. The mask is a
+    # derived view of `conditions` against the same frame, so leaving it out
+    # of the comparison loses nothing.
+    mask: np.ndarray = field(repr=False, compare=False)
     n: int
     rga: float
     shortfall: float
@@ -135,9 +141,12 @@ class CohortSearch:
     #: Why the p-value is not optional reading.
     SELECTION_NOTE = (
         "The worst of many cohorts is low partly because it is the worst of "
-        "many. p_value is the share of score permutations whose best-found "
-        "cohort was at least as bad, so it accounts for the whole search; a "
-        "single cohort's own confidence interval does not."
+        "many. p_value is the share of permutations of the cohort definitions "
+        "whose worst-found cohort was at least as bad, so it accounts for the "
+        "whole search; a single cohort's own confidence interval does not. "
+        "The definitions are permuted rather than the score: permuting the "
+        "score would test 'no ranking signal at all', which is not the "
+        "hypothesis at issue."
     )
 
     def __float__(self) -> float:
@@ -174,6 +183,20 @@ class CohortSearch:
         }
 
 
+def _missing_bin(column: Any, present: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    """A bin for the rows the feature says nothing about, if there are any.
+
+    Missing gets its own bin rather than being dropped. "the rows where this
+    field was never filled in" is exactly the kind of slice this search exists
+    to surface, and dropping those rows would make them unsearchable without
+    saying so anywhere in the result.
+    """
+    absent = ~present
+    if not absent.any():
+        return []
+    return [(f"{column} is missing", absent)]
+
+
 def _bin_conditions(
     X: Any, columns: Sequence[Any], n_bins: int
 ) -> list[tuple[str, np.ndarray]]:
@@ -182,28 +205,54 @@ def _bin_conditions(
     for column in columns:
         raw = X[column]
         try:
-            values = as_1d_float(raw, str(column))
+            # allow_nan, and the reason matters: as_1d_float raises the same
+            # InputError for "this column is not numeric" and for "this
+            # numeric column contains a NaN". Left to the default, one missing
+            # value in an interval-scaled feature would be caught below as
+            # categorical, and the level-per-value branch would then emit one
+            # bin per distinct float - n bins instead of n_bins, a depth-2
+            # search that is O(n^2) in mask intersections, and, since no
+            # single-value bin can clear min_size, an empty result reported
+            # without a word. Measured at n=4000: 35 seconds to search nothing.
+            values = as_1d_float(raw, str(column), allow_nan=True)
         except InputError:
-            # Categorical / string column: every distinct level is a bin.
+            # Genuinely categorical / string column: every level is a bin.
             arr = np.asarray(raw.to_numpy() if hasattr(raw, "to_numpy") else raw)
-            for level in dict.fromkeys(arr.tolist()):
-                out.append((f"{column} == {level!r}", arr == level))
+            present = np.fromiter(
+                (not is_missing(value) for value in arr.tolist()),
+                dtype=bool,
+                count=arr.size,
+            )
+            for level in dict.fromkeys(arr[present].tolist()):
+                out.append((f"{column} == {level!r}", present & (arr == level)))
+            out.extend(_missing_bin(column, present))
             continue
 
-        distinct = np.unique(values)
+        # Non-finite values carry no position on the scale, so they cannot sit
+        # inside any interval; they are collected into the missing bin instead.
+        present = np.isfinite(values)
+        if not present.any():
+            out.extend(_missing_bin(column, present))
+            continue
+        observed = values[present]
+
+        distinct = np.unique(observed)
         if distinct.size <= n_bins:
             for level in distinct:
-                out.append((f"{column} == {level:g}", values == level))
+                out.append((f"{column} == {level:g}", present & (values == level)))
+            out.extend(_missing_bin(column, present))
             continue
         # Quantile edges, deduplicated: a heavily tied column can collapse
         # several quantiles onto the same edge, which would make empty bins.
-        edges = np.unique(np.quantile(values, np.linspace(0, 1, n_bins + 1)))
+        edges = np.unique(np.quantile(observed, np.linspace(0, 1, n_bins + 1)))
         for i in range(edges.size - 1):
             low, high = edges[i], edges[i + 1]
             last = i == edges.size - 2
-            mask = (values >= low) & (values <= high if last else values < high)
+            mask = present & (values >= low)
+            mask &= values <= high if last else values < high
             operator = "<=" if last else "<"
             out.append((f"{low:g} <= {column} {operator} {high:g}", mask))
+        out.extend(_missing_bin(column, present))
     return out
 
 
@@ -273,7 +322,10 @@ def worst_cohort(
     n_bins :
         Quantile bins per numeric feature. A feature with at most ``n_bins``
         distinct values is used as-is, one bin per value; a string or
-        categorical feature is always one bin per level.
+        categorical feature is always one bin per level. Rows whose value is
+        missing (NaN, infinite, ``None``, ``pandas.NA``) join a ``"<column> is
+        missing"`` bin instead of being dropped, so a cohort defined by the
+        absence of a field is searched like any other.
     max_depth :
         1 for single conditions, 2 (default) to also search every intersection
         of two. Cost is ``O((n_bins * n_features)^max_depth)`` cohorts.

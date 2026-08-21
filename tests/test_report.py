@@ -187,3 +187,47 @@ def test_tiny_protected_group_is_flagged_in_warnings(fitted_logit):
     )
     assert result.fairness["rga_parity"]["gap"] is None
     assert any("min_group_size" in w for w in result.warnings)
+
+
+def test_a_categorical_protected_column_costs_one_section_not_the_report(rng):
+    """proxy_leakage needs a numeric protected attribute; the report does not.
+
+    rga_parity groups happily on strings, so a categorical protected column is
+    an ordinary input. proxy_leakage ranks that column with RGA and cannot
+    take one, and the call sat outside any guard - so the whole report raised,
+    against the documented contract that anything not computable is skipped
+    and noted in warnings.
+    """
+    import numpy as np
+
+    pd = pytest.importorskip("pandas")
+    n = 600
+    frame = pd.DataFrame(
+        {
+            "a": rng.normal(size=n),
+            "b": rng.normal(size=n),
+            "region": rng.choice(["north", "south"], n),
+        }
+    )
+    y = (rng.random(n) < 0.4).astype(float)
+
+    class ScoreFromA:
+        def predict(self, X):
+            return 1 / (1 + np.exp(-np.asarray(X["a"], dtype=float)))
+
+    model = ScoreFromA()
+    report = rgbox_report(
+        y=y,
+        X_test=frame,
+        model=model,
+        yhat=model.predict(frame),
+        protected="region",
+        variables=["a", "b"],
+        random_state=0,
+    )
+
+    assert report.fairness["rga_parity"]["gap"] is not None
+    assert "proxy_leakage" not in report.fairness
+    assert any(w.startswith("proxy leakage skipped:") for w in report.warnings)
+    json.dumps(report.to_dict(), default=str)
+    report.to_markdown()

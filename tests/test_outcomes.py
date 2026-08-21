@@ -198,3 +198,41 @@ def test_interpretation_warns_against_reading_it_as_ranking_quality(biased):
     result = outcome_parity(y, scores, groups, threshold=0.5, random_state=0)
     assert "not a substitute" in result.INTERPRETATION
     assert "rga_parity" in result.to_dict()["interpretation"]
+
+
+def test_groups_with_identical_rates_do_not_abort_the_criterion(rng):
+    """max() and min() both return the first extremal element.
+
+    So when every included group shares one rate, best collapses onto worst,
+    {best, worst} is a one-element set, and the widest-pair lookup raised a
+    bare StopIteration out of outcome_parity.
+    """
+    n_a, n_b = 200, 400
+    decisions = np.concatenate(
+        [
+            np.r_[np.ones(60), np.zeros(n_a - 60)],  # 60/200 = 0.30
+            np.r_[np.ones(120), np.zeros(n_b - 120)],  # 120/400 = 0.30
+        ]
+    )
+    groups = np.array(["a"] * n_a + ["b"] * n_b)
+    y = (rng.random(n_a + n_b) < 0.4).astype(float)
+
+    result = outcome_parity(y, decisions, groups, random_state=0)
+    criterion = result["demographic_parity"]
+    assert criterion.gap == pytest.approx(0.0)
+    assert criterion.best_group != criterion.worst_group
+    assert criterion.gap_p_value is not None
+
+
+def test_a_threshold_above_every_score_is_reported_not_raised(rng):
+    """Every decision is 0, so every rate is 0 - the same tie, reached the
+    way an over-strict cut-off reaches it in production."""
+    n = 400
+    y = (rng.random(n) < 0.4).astype(float)
+    scores = rng.random(n)
+    groups = np.where(np.arange(n) < n // 2, "a", "b")
+
+    result = outcome_parity(y, scores, groups, threshold=2.0, random_state=0)
+    assert result["demographic_parity"].gap == pytest.approx(0.0)
+    # No positive rate anywhere, so the ratio is undefined rather than 1.
+    assert result["demographic_parity"].ratio is None

@@ -52,6 +52,47 @@ Versioning restarts at 1.0.0 for the fork; upstream's last release was 0.8.3
 
 ### Fixed
 
+- **One NaN turned a numeric feature into a categorical one in `worst_cohort`.**
+  `as_1d_float` raises the same `InputError` for "this column is not numeric"
+  and for "this numeric column contains a NaN", and `_bin_conditions` read the
+  second as the first. The level-per-value branch then emitted **one bin per
+  distinct float** — `n` bins instead of `n_bins` — so no bin could clear
+  `min_size`, the search reported nothing, and depth 2 spent O(n²) mask
+  intersections getting there: measured at n=4000, **34.6 s to search zero
+  cohorts**, down to 0.003 s. Rows whose value is missing now join an explicit
+  `"<column> is missing"` bin rather than falling out of every bin, so a cohort
+  defined by the absence of a field is searched like any other. The same
+  treatment is applied on the categorical branch, where NaN levels had the
+  `nan != nan` deduplication problem fixed for group labels above.
+- **`outcome_parity` raised a bare `StopIteration` when every included group
+  had the same rate.** `max()` and `min()` both return the *first* extremal
+  element, so `best` collapsed onto `worst`, `{best, worst}` became a
+  one-element set, and the widest-pair lookup found nothing. Two ordinary
+  inputs reach it: a threshold above every score (every rate is 0), and two
+  groups whose counts reduce to the same proportion (60/200 against 120/400).
+  The two ends are now taken from a rate-ordered list, which keeps them
+  distinct; the gap is reported as 0.
+- **A categorical protected column aborted the whole report.** `proxy_leakage`
+  ranks the protected attribute with RGA and so needs it numeric; nothing else
+  in the fairness block does, and `rga_parity` groups on strings happily. The
+  call sat outside any guard, so `rgbox_report(..., protected="region")` raised
+  instead of producing a report — against the documented contract that anything
+  not computable is skipped and noted in `warnings`. It now costs that one
+  section and a warning.
+- `Cohort` is a frozen dataclass with an `np.ndarray` field, which poisoned the
+  derived `__eq__` and `__hash__`: `a == b` raised on the ambiguous array truth
+  value and `hash(a)` on unhashability, taking `CohortSearch` equality and
+  `set(result.cohorts)` down with them. The mask is excluded from comparison —
+  it is a derived view of `conditions` against the same frame.
+- `CohortSearch.SELECTION_NOTE`, which is serialised into `to_dict()` and
+  quoted in reports, described a test the code does not run: it said the
+  p-value permutes the *score* and takes the *best*-found cohort, where the
+  code permutes the cohort definitions and takes the worst. The module
+  docstring argues at length that permuting the score is the wrong null.
+- `_count_missing` ran `tolist()` plus a Python-level predicate per element on
+  every parity, segment and outcome call. Vectorised per dtype, with the object
+  path kept as the fallback: **136 ms → 0.8 ms** for a million labels, and the
+  fast paths are tested to agree with the fallback element for element.
 - **`rga_parity` and `rga_by_segment` invented one empty group per missing
   label, and silently dropped those rows.** `dict.fromkeys(labels.tolist())`
   rebuilds a fresh `float` object per element and `nan != nan`, so NaN labels

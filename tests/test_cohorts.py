@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from rgbox import worst_cohort
+from rgbox.cohorts import _bin_conditions
 from rgbox.exceptions import InputError
 
 pytest.importorskip("pandas")
@@ -178,3 +179,78 @@ def test_rejects_an_unsupported_depth(planted):
     y, scores, frame, _ = planted
     with pytest.raises(InputError, match="max_depth"):
         worst_cohort(y, scores, frame, max_depth=3)
+
+
+def test_a_numeric_feature_with_a_nan_is_still_binned_as_numeric(rng):
+    """One NaN must not turn an interval-scaled feature into a categorical one.
+
+    as_1d_float raises the same InputError for "not numeric" and for "numeric
+    but contains a NaN". Conflating the two produced one bin per distinct
+    float - so no bin could clear min_size, the search reported nothing, and
+    depth 2 spent O(n^2) getting there.
+    """
+    pd = pytest.importorskip("pandas")
+    n = 800
+    y = (rng.random(n) < 0.4).astype(float)
+    scores = rng.random(n) * 0.5 + y * 0.3
+    values = rng.normal(size=n)
+    values[7] = np.nan
+    frame = pd.DataFrame({"f": values})
+
+    conditions = _bin_conditions(frame, ["f"], 4)
+    labels = [name for name, _ in conditions]
+    assert len(conditions) == 5, labels  # four quantile bins plus missing
+    assert labels[-1] == "f is missing"
+
+    result = worst_cohort(y, scores, frame, min_size=100, n_permutations=0)
+    assert result.n_cohorts_searched > 0
+
+
+def test_every_row_lands_in_some_bin(rng):
+    """Missing is a bin, not a silent deletion - for numbers and for strings."""
+    pd = pytest.importorskip("pandas")
+    n = 300
+    numeric = rng.normal(size=n)
+    numeric[[1, 2, 3]] = np.nan
+    numeric[4] = np.inf
+    categorical = np.array(rng.choice(["x", "y"], n), dtype=object)
+    categorical[[5, 6]] = None
+    frame = pd.DataFrame({"num": numeric, "cat": categorical})
+
+    for column in ("num", "cat"):
+        covered = np.zeros(n, dtype=bool)
+        for _, mask in _bin_conditions(frame, [column], 4):
+            covered |= mask
+        assert covered.all(), f"{column}: {int((~covered).sum())} rows in no bin"
+
+
+def test_an_all_missing_feature_contributes_one_bin(rng):
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame({"f": np.full(200, np.nan)})
+    conditions = _bin_conditions(frame, ["f"], 4)
+    assert [name for name, _ in conditions] == ["f is missing"]
+
+
+def test_cohorts_compare_and_hash(planted):
+    """A frozen dataclass with an ndarray field breaks == and hash() for good."""
+    y, scores, frame, _ = planted
+    first = worst_cohort(y, scores, frame, min_size=100, n_permutations=0)
+    second = worst_cohort(y, scores, frame, min_size=100, n_permutations=0)
+
+    assert first.cohorts[0] == second.cohorts[0]
+    assert first == second
+    assert len(set(first.cohorts)) == len(first.cohorts)
+
+
+def test_the_selection_note_describes_the_test_that_is_actually_run(planted):
+    """The note is serialised into to_dict() and quoted in reports.
+
+    It used to say the p-value permuted the *score* and took the *best*-found
+    cohort. The module docstring argues at length that permuting the score is
+    the wrong null, and the code takes the worst.
+    """
+    y, scores, frame, _ = planted
+    note = worst_cohort(y, scores, frame, min_size=100, n_permutations=0).SELECTION_NOTE
+    assert "permutations of the cohort definitions" in note
+    assert "worst-found cohort" in note
+    assert "score permutations" not in note

@@ -359,8 +359,14 @@ def _criterion(
 
     names = list(kept)
     rates = {label: kept[label][0] for label in names}
-    best = max(names, key=lambda label: rates[label])
-    worst = min(names, key=lambda label: rates[label])
+    # Ordering, rather than max() and min(), is what keeps the two ends
+    # distinct. Both return the *first* extremal element, so groups that all
+    # share one rate collapse best onto worst, {best, worst} becomes a
+    # one-element set, and the widest-pair lookup below finds nothing. Equal
+    # rates are not exotic: a threshold above every score makes every rate 0,
+    # and two groups whose counts reduce to the same proportion do it too.
+    by_rate = sorted(names, key=lambda label: rates[label])
+    worst, best = by_rate[0], by_rate[-1]
     gap = rates[best] - rates[worst]
 
     standard_errors = np.array([kept[label][1] for label in names], dtype=np.float64)

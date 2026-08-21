@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .accuracy import accuracy_report
+from .exceptions import InputError
 from .explainability import rge
 from .fairness import labels_from_dummies, proxy_leakage, rga_parity, rgf
 from .predictors import predict_scores, resolve_columns
@@ -398,7 +399,15 @@ def rgbox_report(
                 greater_is_better=greater_is_better,
                 random_state=random_state,
             )
-        block["proxy_leakage"] = proxy_leakage(X_test, protected, yhat=yhat)
+        # Proxy leakage needs the protected attribute to be *numeric*, because
+        # it ranks it with RGA. The rest of the fairness block does not - a
+        # string column is a perfectly ordinary grouping variable for
+        # rga_parity - so a categorical attribute must cost the report this
+        # one section, not the whole run.
+        try:
+            block["proxy_leakage"] = proxy_leakage(X_test, protected, yhat=yhat)
+        except InputError as exc:
+            warnings.append(f"proxy leakage skipped: {exc}")
         gap = block["rga_parity"]["gap"]
         if gap is None:
             warnings.append(

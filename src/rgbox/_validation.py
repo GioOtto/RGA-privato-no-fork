@@ -62,6 +62,26 @@ def _ravel_columnish(value: Any, name: str) -> np.ndarray:
 
 
 def _count_missing(arr: np.ndarray) -> int:
+    """Count ``None`` / NaN / ``pandas.NA`` / ``NaT``, vectorised where possible.
+
+    ``as_group_labels`` runs this on every parity, segment and outcome call, so
+    the object-dtype fallback - materialise a Python list and ask each element
+    whether it is missing - must not be the path a plain float or string column
+    takes. It costs two orders of magnitude more than the numpy predicate and
+    more than the metric it is guarding.
+    """
+    kind = arr.dtype.kind
+    if kind in "fc":
+        return int(np.isnan(arr).sum())
+    if kind in "iub":
+        return 0  # integers and booleans have no missing state
+    if kind in "US":
+        # A fixed-width string array stores the *text* "nan"; it holds no
+        # missing value, which is what the object path below would conclude.
+        return 0
+    if kind in "Mm":
+        return int(np.isnat(arr).sum())
+    # Object dtype: the elements are arbitrary Python, so ask each one.
     return sum(1 for value in arr.tolist() if is_missing(value))
 
 
