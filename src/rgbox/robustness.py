@@ -375,18 +375,32 @@ def _pool_across_draws(
     The estimand and its two error terms
     ------------------------------------
     ``rgr`` reports ``theta_bar = mean_j RGA(yhat, yhat_Pj)``. Its target is
-    the perturbation-expected RGR, and it carries two independent errors: the
-    evaluation sample is finite, and only ``m`` perturbations were drawn. By
-    the law of total variance,
+    the perturbation-expected RGR, and it carries two errors: the evaluation
+    sample is finite, and only ``m`` perturbations were drawn. This adds
 
-    ``Var(theta_bar) = Var_sample(theta_bar | P_1..P_m) + Var_P(RGR) / m``.
+    ``T1 + B / m``
 
-    The second term is ``B / m`` with ``B`` the spread across draws. The first
-    is obtained by **linearising the statistic that is actually reported**: the
+    with ``T1`` the sampling variance of ``theta_bar`` **given the realised
+    draws** and ``B`` the spread across draws given the observed sample. ``T1``
+    is obtained by linearising the statistic that is actually reported: the
     influence function of an average is the average of the influence functions,
     and likewise for jackknife delete-one values and for bootstrap replicates
     under shared weights. So the per-draw value vectors are averaged
     element-wise *first*, and the spread is taken of that average.
+
+    This sum is **not** the law of total variance, and it is not exact. Under
+    the orthogonal decomposition ``g(S, P) = mu + a(S) + b(P) + c(S, P)`` the
+    target is
+
+    ``Var(theta_bar) = var_a + (var_b + var_c) / m``,
+
+    while ``T1 -> var_a + var_c / m`` and ``B / m -> (var_b + var_c) / m``, so
+    the sum carries ``var_c / m`` twice. It is therefore biased upward by one
+    interaction term over ``m``. Separating ``var_b`` from ``var_c`` needs a
+    second, independent evaluation sample - or a nested resample over both - so
+    it is not done here. Verified on a synthetic orthogonal design with
+    ``var_a = 1, var_b = 2, var_c = 3, m = 8``: truth 1.625, ``T1 + B/m``
+    2.000, over by exactly ``var_c / m = 0.375``.
 
     Why the mean of the per-draw variances was wrong
     ------------------------------------------------
@@ -417,13 +431,19 @@ def _pool_across_draws(
     -------------------------
     The averaged linearisation is the right one for ``theta_bar`` and it does
     shrink with ``m``, but the table above shows it plateauing around 4e-5
-    where the empirical sampling floor is nearer 1e-6. **These intervals are
-    conservative, by a factor that has not been characterised**, and their
-    coverage has not been validated by simulation the way the RGA intervals in
-    :mod:`rgbox.inference` have. Read a multi-draw RGR interval as an upper
-    bound on the uncertainty, and see ``docs/THEORY.md``'s open questions. The
-    single-draw interval (``n_repeats=1``, the default) is an ordinary RGA
-    interval and is not affected by any of this.
+    where the empirical sampling floor is nearer 1e-6 - a gap far larger than
+    the ``var_c / m`` double count above accounts for.
+
+    So: **in the Gaussian design studied so far these intervals came out
+    conservative, by a factor that has not been characterised, and their
+    coverage has not been validated.** That is an observation about one design,
+    not a proof, and it must not be read as a guarantee: do not treat a
+    multi-draw RGR interval as a calibrated confidence interval, and do not
+    treat it as an upper bound either. See ``docs/THEORY.md``'s open questions.
+
+    The single-draw interval (``n_repeats=1``, the default) is an ordinary RGA
+    interval, whose coverage *is* simulation-checked in
+    :mod:`rgbox.inference`, and is not affected by any of this.
     """
     m = len(per_draw_values)
     point = float(np.mean(draws))

@@ -4,6 +4,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning restarts at 1.0.0 for the fork; upstream's last release was 0.8.3
 (14 May 2025).
 
+## [1.0.4]
+
+Three defects and one hardening step, from a third audit pass over `b420b17`.
+Two of the three were introduced by the 1.0.3 fixes; the pattern is now
+established enough to state plainly: **every fix that adds a fallback or drops
+a validation call needs its own audit.** Both of this round's regressions are
+fallbacks that looked harmless and silently invented an answer.
+
+### Fixed — correctness
+
+- **`rga_ovr(classes=None)` invented a column order for heterogeneous labels
+  and inverted the result.** 1.0.3 added `sorted(observed, key=repr)` as a
+  fallback for targets `np.unique` cannot order. It is deterministic and it is
+  wrong: `repr("a")` starts with a quote, so `[1, "a"]` sorts to `["a", 1]` and
+  the two columns of `proba` swap. Measured on a **perfect** classifier over
+  that target: `rga = 0.0000` — reported as perfectly inverted, with no error
+  anywhere.
+
+  The columns of `proba` carry no labels of their own, so nothing but an
+  ordering rule maps them to classes, and a mixed-type target has no ordering
+  rule that means anything. The fallback is gone; `classes` is now required in
+  that case, and named as required in the message. `np.unique` still supplies
+  the default whenever the labels *do* have a natural order, so nothing changes
+  for the ordinary numeric or all-string target.
+
+### Fixed — API contract
+
+- **An unhashable entry in `classes` raised a bare `TypeError`.** 1.0.3 gave
+  `as_group_labels` a typed rejection for unhashable *group* labels but left
+  the duplicate check in `rga_ovr` doing `dict.fromkeys(classes)`, so
+  `classes=["a", "b", ["c"]]` still died on `unhashable type: 'list'` naming
+  neither the argument nor the entry. Same contract, same message shape.
+
+### Fixed — documentation of the RGR interval
+
+- **The multi-draw RGR variance was described as the law of total variance, and
+  the interval as an upper bound. Neither is true.** The estimator adds `T1`
+  (sampling variance given the realised draws) to `B/m` (spread across draws
+  given the observed sample), and under the orthogonal decomposition
+  `g(S, P) = mu + a(S) + b(P) + c(S, P)` these converge to `var_a + var_c/m`
+  and `(var_b + var_c)/m` — so the sum carries the interaction `var_c/m`
+  **twice**, against a target of `var_a + (var_b + var_c)/m`. Checked on a
+  synthetic orthogonal design with `var_a=1, var_b=2, var_c=3, m=8`: truth
+  1.625, estimator 2.000, excess exactly `var_c/m = 0.375`. Splitting `var_b`
+  from `var_c` needs a second independent evaluation sample or a nested
+  resample over both, so the bias is documented rather than removed, and
+  `tests/test_audit_af4b676.py` pins the algebra so it cannot be quietly
+  forgotten.
+
+  "Read them as an upper bound" is also withdrawn. Conservativeness was
+  *observed in one Gaussian design*; that is not a proof, and an upper bound is
+  a much stronger claim than the evidence supports. The docstring, the README
+  and `docs/THEORY.md` now say the intervals are not calibrated confidence
+  intervals and must not be read as upper bounds either. The `n_repeats=1`
+  default is an ordinary RGA interval whose coverage *is* simulation-checked,
+  and is unaffected.
+
+### Added — release hardening
+
+- **CI now inspects the built artefacts, not just the build configuration.**
+  `test_packaging.py` asserts that Hatch's sdist `include` excludes
+  `examples/`; that is a check on the config, and a default-include rule, a
+  `MANIFEST` or a force-include could put the files back without the config
+  saying so. Since the requirement here is legal and not only technical, the
+  `build` job now opens the wheel and the sdist it just produced and fails if
+  either contains `upstream_reference/`, `R_codes/` or `examples/`. Verified
+  against synthetic archives of both shapes, including that a legitimate path
+  merely *containing* the word (`docs/examples.md`, `rgbox/examples_helper.py`)
+  does not trip it, and that an empty `dist/` fails rather than passing
+  vacuously.
+
 ## [1.0.3]
 
 Six defects found re-auditing `af4b676`. Two of them were introduced or left

@@ -625,10 +625,27 @@ Things this fork deliberately does not settle:
   spread. That is the correct linearisation of the statistic actually reported
   — the influence function of an average is the average of the influence
   functions — and unlike the previous $`\mathrm{mean}_j\,\mathrm{SE}_j^2`$
-  it does shrink as $m$ grows. It is nevertheless **conservative by a factor
-  that has not been characterised**. Measured on a Gaussian design at
-  $n = 300$, against the empirical variance of the reported estimate over
-  1500–4000 replications:
+  it does shrink as $m$ grows.
+
+  Two things remain wrong with it. **First, the sum is not the law of total
+  variance and is not exact.** Under the orthogonal decomposition
+  $g(S,P) = \mu + a(S) + b(P) + c(S,P)$ the quantity wanted is
+
+  ```math
+  \mathrm{Var}(\bar g) = \sigma_a^2 + \frac{\sigma_b^2 + \sigma_c^2}{m},
+  ```
+
+  whereas the first term converges to $`\sigma_a^2 + \sigma_c^2/m`$ and $B/m$ to
+  $`(\sigma_b^2 + \sigma_c^2)/m`$, so the sum carries the interaction
+  $`\sigma_c^2/m`$ **twice**. Checked on a synthetic orthogonal design with
+  $`\sigma_a^2 = 1,\ \sigma_b^2 = 2,\ \sigma_c^2 = 3,\ m = 8`$: truth 1.625,
+  estimator 2.000, excess exactly $`\sigma_c^2/m = 0.375`$. Splitting
+  $`\sigma_b^2`$ from $`\sigma_c^2`$ needs a second independent evaluation
+  sample, or a nested resample over both, and is not done.
+
+  **Second, the residual gap is much larger than that double count explains.**
+  Measured on a Gaussian design at $n = 300$, against the empirical variance of
+  the reported estimate over 1500–4000 replications:
 
   | $m$ | true Var | $`\mathrm{mean}_j\,\mathrm{SE}_j^2`$ | $\mathrm{var}(\overline{\mathrm{IF}})/n$ |
   |---:|---:|---:|---:|
@@ -643,9 +660,14 @@ Things this fork deliberately does not settle:
   influence functions across draws do not decorrelate the way the average
   assumes. A derivation that identifies $\mathrm{Var}_S(\mu(S))$ directly
   — or a nested bootstrap over both the sample and the perturbation — is
-  unfinished work. Until it exists, read a multi-draw RGR interval as an
-  **upper bound** on the uncertainty. The default `n_repeats=1` interval is an
-  ordinary RGA interval and is covered by the simulations above.
+  unfinished work.
+
+  Until it exists: in this design the interval came out **conservative, by an
+  uncharacterised factor**. That is an observation about one design and not a
+  proof, so a multi-draw RGR interval must not be read as a calibrated
+  confidence interval, and must not be read as an upper bound either. The
+  default `n_repeats=1` interval is an ordinary RGA interval and *is* covered
+  by the coverage simulations above.
 * **A search-aware interval for the worst cohort.** `worst_cohort` reports a
   family-wise p-value that accounts for the search, and a per-cohort interval
   that does not. A selection-adjusted *interval* — the analogue of post-

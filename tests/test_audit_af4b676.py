@@ -67,6 +67,32 @@ def test_rga_ovr_rejects_duplicated_classes():
         rga_ovr(y, proba, classes=["a", "a", "b"])
 
 
+def test_rga_ovr_requires_classes_for_heterogeneous_labels():
+    """`sorted(key=repr)` invented a column order and inverted the result.
+
+    `repr("a")` starts with a quote, so `[1, "a"]` sorts to `["a", 1]` and the
+    two columns of `proba` swap. Measured before the fix on a *perfect*
+    classifier over that target: rga = 0.0000, i.e. reported as perfectly
+    inverted, with no error anywhere. No ordering rule can recover the order
+    `proba`'s columns were built in, so the caller has to say.
+    """
+    y = np.array([1, "a", 1, "a"], dtype=object)
+    proba = np.array([[0.9, 0.1], [0.1, 0.9], [0.8, 0.2], [0.2, 0.8]])
+    with pytest.raises(InputError, match="no common natural ordering"):
+        rga_ovr(y, proba)
+    # Told the order, it gets the right answer.
+    assert rga_ovr(y, proba, classes=[1, "a"])["rga"] == pytest.approx(1.0)
+
+
+def test_rga_ovr_rejects_an_unhashable_class_name():
+    y = np.array(["a", "b", "c", "a"], dtype=object)
+    proba = np.array(
+        [[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.3, 0.3, 0.4], [0.7, 0.2, 0.1]]
+    )
+    with pytest.raises(InputError, match="unhashable entry"):
+        rga_ovr(y, proba, classes=["a", "b", ["c"]])
+
+
 def test_rga_ovr_default_classes_keep_numeric_order():
     """`sorted(key=repr)` would put 10.0 before 2.0 and transpose two columns."""
     y = np.array([2.0, 10.0, 2.0, 10.0])
@@ -186,6 +212,34 @@ def test_the_bootstrap_pooling_shares_weights_across_draws(rng):
     again = _draw_values(baseline, a, "bootstrap", 200, 99)
     assert np.array_equal(rep_a, again)
     assert not np.array_equal(rep_a, rep_b)
+
+
+def test_the_pooled_variance_double_counts_the_interaction_by_exactly_one_term(rng):
+    """Pins the *known* residual bias of `T1 + B/m`, so it cannot be forgotten.
+
+    Under the orthogonal decomposition g(S,P) = mu + a(S) + b(P) + c(S,P) the
+    quantity wanted is var_a + (var_b + var_c)/m, while T1 -> var_a + var_c/m
+    and B/m -> (var_b + var_c)/m. The sum therefore carries var_c/m twice. This
+    is a property of the estimator, not of RGA, so it is checked on the
+    decomposition directly.
+    """
+    var_a, var_b, var_c, m = 1.0, 2.0, 3.0, 8
+
+    truth = var_a + (var_b + var_c) / m
+    t1_limit = var_a + var_c / m
+    b_over_m_limit = (var_b + var_c) / m
+    assert t1_limit + b_over_m_limit == pytest.approx(truth + var_c / m)
+
+    # And the same thing by simulation, so the algebra is not just asserted.
+    draws = np.array(
+        [
+            rng.normal(0, np.sqrt(var_a))
+            + rng.normal(0, np.sqrt(var_b), m).mean()
+            + rng.normal(0, np.sqrt(var_c), m).mean()
+            for _ in range(60_000)
+        ]
+    )
+    assert np.var(draws, ddof=1) == pytest.approx(truth, rel=0.03)
 
 
 def test_the_rgr_interval_is_still_centred_on_the_reported_point(rng):

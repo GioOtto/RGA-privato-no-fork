@@ -200,6 +200,52 @@ jobs:
               assert f"{package}/py.typed" in names, f"{package}/py.typed missing from {wheel}"
           print("py.typed present for both packages")
           PY
+      - name: No unlicensed upstream material in either artefact
+        # NOTICE.md identifies upstream_reference/, R_codes/ and examples/ as
+        # verbatim upstream source carrying no licence. A wheel or an sdist is
+        # a redistribution, so shipping any of them would turn a
+        # repository-level provenance question into an actual unlicensed
+        # redistribution. tests/test_packaging.py asserts the *Hatch
+        # configuration* excludes them; this asserts it about the bytes that
+        # were actually produced, which is what would be uploaded. The two are
+        # not the same check - a default-include rule, a MANIFEST or a
+        # force-include could put the files back without the config saying so.
+        run: |
+          python - <<'PY'
+          import glob, tarfile, zipfile
+
+          FORBIDDEN = ("upstream_reference/", "R_codes/", "examples/")
+
+          def bad_names(names, strip_root):
+              out = []
+              for name in names:
+                  # An sdist wraps everything in one "<name>-<version>/" root;
+                  # a wheel has no such prefix.
+                  relative = name.split("/", 1)[-1] if strip_root else name
+                  if relative.startswith(FORBIDDEN):
+                      out.append(name)
+              return sorted(out)
+
+          failures = []
+          artefacts = sorted(glob.glob("dist/*"))
+          for wheel in glob.glob("dist/*.whl"):
+              bad = bad_names(zipfile.ZipFile(wheel).namelist(), strip_root=False)
+              if bad:
+                  failures.append((wheel, bad))
+          for sdist in glob.glob("dist/*.tar.gz"):
+              with tarfile.open(sdist) as archive:
+                  bad = bad_names(archive.getnames(), strip_root=True)
+              if bad:
+                  failures.append((sdist, bad))
+
+          for artefact, bad in failures:
+              print(f"{artefact} redistributes unlicensed upstream material:")
+              for name in bad[:20]:
+                  print(f"  {name}")
+          assert artefacts, "no artefacts were built, so nothing was checked"
+          assert not failures, "see NOTICE.md; these paths must not be packaged"
+          print(f"checked {len(artefacts)} artefact(s): clean")
+          PY
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: dist

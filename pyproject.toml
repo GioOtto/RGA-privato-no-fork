@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "safeaipackage-rgbox"
-version = "1.0.3"
+version = "1.0.4"
 description = "Rank Graduation Box (S.A.F.E. AI) metrics with statistical inference - a hardened fork of safeaipackage"
 readme = "README.md"
 requires-python = ">=3.9"

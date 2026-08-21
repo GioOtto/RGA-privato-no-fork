@@ -237,6 +237,12 @@ def rga_ovr(
     the fairness and segment tables already use, and for the same reason - and
     ``classes`` is checked against the levels actually observed rather than
     only for length.
+
+    ``classes`` is **required** when the labels have no common natural
+    ordering - ``[1, "a"]``, say. The columns of ``proba`` carry no labels of
+    their own, so the only thing that maps them to classes is an ordering rule,
+    and a mixed-type target has none that means anything. See the body for what
+    guessing one did.
     """
     proba_arr = np.asarray(proba, dtype=np.float64)
     if proba_arr.ndim != 2:
@@ -251,8 +257,23 @@ def rga_ovr(
             # scikit-learn `classes_` uses; sorting by repr would put 10.0
             # before 2.0 and silently transpose two columns of `proba`.
             classes = np.unique(y_arr).tolist()
-        except TypeError:  # heterogeneous labels have no natural order
-            classes = sorted(observed, key=repr)
+        except TypeError as exc:
+            # Heterogeneous labels have no natural order, and *no* ordering
+            # rule can recover the one `proba`'s columns were built in. This
+            # briefly fell back to sorted(key=repr), which is deterministic and
+            # still wrong: repr("a") starts with a quote, so [1, "a"] sorts to
+            # ["a", 1] and the two columns swap. A perfect classifier on that
+            # target came back as rga = 0.0000 - perfectly inverted - with no
+            # error anywhere. The mapping is the caller's to state.
+            raise InputError(
+                "'classes' must be given when the class labels have no common "
+                f"natural ordering (got types "
+                f"{sorted({type(v).__name__ for v in observed})!r}). The "
+                "columns of 'proba' carry no labels, so there is no way to map "
+                "them to classes without being told the order - and guessing "
+                "one silently transposes columns. Pass classes=[...] in the "
+                "column order of 'proba'."
+            ) from exc
     else:
         classes = list(classes)
     if len(classes) != proba_arr.shape[1]:
@@ -260,7 +281,19 @@ def rga_ovr(
             f"'classes' has {len(classes)} entries but 'proba' has "
             f"{proba_arr.shape[1]} columns."
         )
-    duplicates = [c for c in dict.fromkeys(classes) if classes.count(c) > 1]
+    try:
+        unique_classes = dict.fromkeys(classes)
+    except TypeError as exc:
+        # Same contract as as_group_labels applies to the class names: they are
+        # compared and counted by value, so they must be hashable. Left to the
+        # duplicate check below, a list among them raised a bare TypeError
+        # naming neither the argument nor the offending entry.
+        raise InputError(
+            f"'classes' contains an unhashable entry ({exc}). Each entry names "
+            "one class and is compared by value, so a list, dict or set cannot "
+            "be a class label."
+        ) from None
+    duplicates = [c for c in unique_classes if classes.count(c) > 1]
     if duplicates:
         raise InputError(
             f"'classes' repeats {duplicates!r}. Each entry names the class of "

@@ -263,10 +263,13 @@ Seeds are drawn once per repeat and shared across variables — common random
 numbers, so two variables are compared under the same shocks rather than under
 independent ones.
 
-> These multi-draw intervals are **conservative by an uncharacterised factor**
-> and their coverage has not been validated by simulation, unlike the RGA
-> intervals. Read them as an upper bound. The default `n_repeats=1` interval is
-> an ordinary RGA interval and is unaffected.
+> These multi-draw intervals came out **conservative in the Gaussian design
+> studied so far, by an uncharacterised factor**, and their coverage has not
+> been validated — unlike the RGA intervals, which are simulation-checked. That
+> is an observation about one design, not a guarantee: do not read them as
+> calibrated confidence intervals, and do not read them as an upper bound
+> either. The default `n_repeats=1` interval is an ordinary RGA interval and is
+> unaffected.
 
 ### Fairness
 
