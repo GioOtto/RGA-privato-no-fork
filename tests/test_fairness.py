@@ -105,6 +105,25 @@ def test_two_groups_need_no_correction(rng):
     assert "1 pair" in result.multiplicity
 
 
+def test_identical_group_rgas_report_a_zero_gap(rng):
+    """Equal RGAs must not collapse the two ends of the table onto each other.
+
+    max() and min() both return the *first* extremal element, so a tie put
+    best on top of worst and the widest-pair lookup raised a bare
+    StopIteration - taking rgbox_report, which calls this unguarded, with it.
+    A model that ranks perfectly inside every group is the easy way to get
+    there.
+    """
+    n = 600
+    y = rng.binomial(1, 0.4, n).astype(float)
+    scores = y.copy()  # perfect ranking: RGA is 1.0 in every group
+    groups = np.array(["a"] * (n // 2) + ["b"] * (n // 2))
+    result = rga_parity(y, scores, groups, n_resamples=200, random_state=0)
+    assert result.gap == pytest.approx(0.0)
+    assert result.best_group != result.worst_group
+    assert result.gap_p_value == pytest.approx(1.0)
+
+
 def test_the_correction_tightens_as_pairs_multiply(rng):
     """Same data, more levels: the adjustment must grow with the family."""
     n = 3000

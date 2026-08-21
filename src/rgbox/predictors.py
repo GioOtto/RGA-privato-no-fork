@@ -8,7 +8,7 @@ restricted to an enumerated list of classes: a Keras model, a statsmodels fit,
 an ONNX session, a pickled scorecard or a plain lambda were all rejected.
 
 Here nothing is imported at module scope. Models are duck-typed, and the
-fallback accepts any callable, so a bank's internal scoring engine wrapped in a
+fallback accepts any callable, so an internal scoring engine wrapped in a
 one-line lambda works exactly as well as an ``XGBClassifier``.
 
 Score conventions

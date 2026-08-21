@@ -7,7 +7,7 @@ inside each protected group. That is **AUC parity** (also called predictive
 parity of discrimination, or "equal discriminatory power"). It is a legitimate
 model-quality question - a scorecard that separates good from bad obligors in
 one segment but not another is broken for that segment - and it is exactly what
-a bank's model-risk function should ask about a rating model.
+a model-risk function should ask about a rating model.
 
 It is *not* demographic parity, nor equalised odds, nor equal opportunity, and
 it does not follow from or imply any of them:
@@ -491,8 +491,15 @@ def rga_parity(
 
     labels = list(eligible)
     point = {label: eligible[label].estimate for label in labels}
-    worst = min(labels, key=lambda label: point[label])
-    best = max(labels, key=lambda label: point[label])
+    # Ordering, rather than max() and min(), is what keeps the two ends
+    # distinct - the same collapse fixed in :func:`rgbox.outcome_parity`. Both
+    # return the *first* extremal element, so groups that all share one RGA
+    # put best on top of worst, {best, worst} becomes a one-element set, and
+    # the widest-pair lookup below raises StopIteration. A model that ranks
+    # perfectly inside every group does it (RGA 1.0 throughout), and so does
+    # any attribute whose groups happen to tie.
+    by_rga = sorted(labels, key=lambda label: point[label])
+    worst, best = by_rga[0], by_rga[-1]
     gap = point[best] - point[worst]
 
     # Pairwise comparisons: disjoint samples, so variances simply add.

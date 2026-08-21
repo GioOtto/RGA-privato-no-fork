@@ -18,8 +18,8 @@ or run the code commercially outside that platform.
 
 Practical consequences:
 
-- A bank cannot clear unlicensed third-party code through third-party-software
-  review. This is normally a hard stop, not a formality.
+- A regulated institution cannot clear unlicensed third-party code through
+  third-party-software review. This is normally a hard stop, not a formality.
 - Publishing this fork to PyPI as a derivative of unlicensed code would be a
   redistribution the upstream authors have not authorised.
 - A thesis that ships derived code has the same problem, in a milder form.

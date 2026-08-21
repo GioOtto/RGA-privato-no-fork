@@ -69,8 +69,8 @@ you to guess.
 > ## ⚠️ Licence warning — read before deploying
 >
 > The upstream project **has no licence**, so it is "all rights reserved" by
-> default and cannot normally clear third-party-software review at a bank.
-> This fork's own code is MIT, but the inherited material
+> default and cannot normally clear third-party-software review at a regulated
+> institution. This fork's own code is MIT, but the inherited material
 > (`upstream_reference/`, `R_codes/`, `examples/employee.xlsx`) is not.
 > **[NOTICE.md](NOTICE.md) explains what to do about it** — in short, ask the
 > authors for an explicit licence; it is a one-email fix.
@@ -182,7 +182,8 @@ Spearman-like in `ŷ`, which is what makes it *not* Spearman's ρ.
 validation report already quotes — but now defined for targets that are not
 binary. An LGD, a loss amount, an exposure or a rating notch gets a number on
 the scale your committee already reads. That framing appears nowhere in the
-source literature and is, for a bank, the reason to adopt the measure at all.
+source literature and is, for a regulated lender, the reason to adopt the
+measure at all.
 
 The equality is *checked*, not asserted: `accuracy_report` computes its `auroc`
 independently, as a Mann-Whitney rank sum with average ranks for ties, so the
@@ -202,7 +203,7 @@ recursion, are in **[docs/THEORY.md](docs/THEORY.md)**.
 from rgbox import rga, gini_score, rga_ci, rga_compare, rga_test, accuracy_report
 
 rga(y, scores)                          # the measure; weights= supported
-gini_score(y, scores)                   # 2·RGA − 1, the banking scale
+gini_score(y, scores)                   # 2·RGA − 1, the Accuracy Ratio scale
 rga_ci(y, scores, method="jackknife")   # estimate + SE + CI
 rga_compare(y, a, b)                    # paired test — the DeLong analogue
 rga_test(y, scores)                     # H0: no ranking information
@@ -466,7 +467,7 @@ principle with no module.
 
 ```bash
 pip install -e ".[dev]"
-pytest                                    # 354 tests
+pytest                                    # 377 tests
 python benchmarks/bench.py
 python examples/bank_model_validation.py
 ```

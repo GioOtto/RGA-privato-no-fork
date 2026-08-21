@@ -224,11 +224,60 @@ def test_every_row_lands_in_some_bin(rng):
         assert covered.all(), f"{column}: {int((~covered).sum())} rows in no bin"
 
 
-def test_an_all_missing_feature_contributes_one_bin(rng):
+def test_an_all_missing_feature_contributes_no_bin(rng):
+    """Its one bin would hold every row, which is the sample, not a cohort.
+
+    Left in, it scored a shortfall of 0 against itself and then intersected
+    with every other bin to produce an exact duplicate of that bin, so `top`
+    came back half-filled with copies. A constant column does the same.
+    """
     pd = pytest.importorskip("pandas")
-    frame = pd.DataFrame({"f": np.full(200, np.nan)})
-    conditions = _bin_conditions(frame, ["f"], 4)
-    assert [name for name, _ in conditions] == ["f is missing"]
+    frame = pd.DataFrame({"f": np.full(200, np.nan), "c": ["z"] * 200})
+    assert _bin_conditions(frame, ["f", "c"], 4) == []
+
+
+def test_a_useless_feature_does_not_duplicate_the_useful_ones(rng):
+    pd = pytest.importorskip("pandas")
+    n = 400
+    y = (rng.random(n) < 0.4).astype(float)
+    scores = rng.random(n) * 0.5 + y * 0.3
+    frame = pd.DataFrame({"good": rng.normal(size=n), "dead": np.full(n, np.nan)})
+
+    result = worst_cohort(y, scores, frame, min_size=50, n_permutations=0, ci=False)
+    labels = [cohort.label for cohort in result.cohorts]
+    assert len(labels) == len(set(labels))
+    assert not any("dead" in label for label in labels)
+
+
+def test_a_categorical_column_with_pandas_na_is_binned(rng):
+    """`arr == level` over the whole column made pandas.NA raise.
+
+    NA == "x" is NA rather than False, and numpy asking for its truth value
+    raises "boolean value of NA is ambiguous", so one missing entry in a
+    string-dtype column took the whole search down - against the documented
+    promise that missing values join an "is missing" bin.
+    """
+    pd = pytest.importorskip("pandas")
+    n = 300
+    y = (rng.random(n) < 0.4).astype(float)
+    scores = rng.random(n) * 0.5 + y * 0.3
+    values = ["x"] * 140 + ["y"] * 120 + [pd.NA] * 40
+
+    for dtype in ("string", "category", "object"):
+        column = (
+            np.array(values, dtype=object)
+            if dtype == "object"
+            else pd.array(values, dtype=dtype)
+        )
+        frame = pd.DataFrame({"seg": column})
+        assert [name for name, _ in _bin_conditions(frame, ["seg"], 4)] == [
+            "seg == 'x'",
+            "seg == 'y'",
+            "seg is missing",
+        ], dtype
+
+        result = worst_cohort(y, scores, frame, min_size=30, n_permutations=0, ci=False)
+        assert "seg is missing" in {cohort.label for cohort in result.cohorts}, dtype
 
 
 def test_cohorts_compare_and_hash(planted):

@@ -200,7 +200,14 @@ def _missing_bin(column: Any, present: np.ndarray) -> list[tuple[str, np.ndarray
 def _bin_conditions(
     X: Any, columns: Sequence[Any], n_bins: int
 ) -> list[tuple[str, np.ndarray]]:
-    """One boolean mask per (feature, bin), with a human-readable condition."""
+    """One boolean mask per (feature, bin), with a human-readable condition.
+
+    A bin that holds every row is dropped: it is the whole sample under
+    another name, not a cohort. It has shortfall 0 by construction, and at
+    depth 2 it pairs with every other bin to produce an exact duplicate of
+    that bin - so ``top=10`` comes back half-filled with copies. A feature
+    that is entirely missing, or constant, is what produces one.
+    """
     out: list[tuple[str, np.ndarray]] = []
     for column in columns:
         raw = X[column]
@@ -218,13 +225,26 @@ def _bin_conditions(
         except InputError:
             # Genuinely categorical / string column: every level is a bin.
             arr = np.asarray(raw.to_numpy() if hasattr(raw, "to_numpy") else raw)
+            values = arr.tolist()
             present = np.fromiter(
-                (not is_missing(value) for value in arr.tolist()),
+                (not is_missing(value) for value in values),
                 dtype=bool,
                 count=arr.size,
             )
-            for level in dict.fromkeys(arr[present].tolist()):
-                out.append((f"{column} == {level!r}", present & (arr == level)))
+            # Grouped by value in one pass rather than one `arr == level`
+            # sweep per level. Broadcasting the comparison over the whole
+            # column is what made a `pandas.NA` blow up here - NA == "x" is
+            # NA, not False, and numpy asking for its truth value raises
+            # "boolean value of NA is ambiguous", so a string-dtype column
+            # with a single missing entry took the search down. Restricting
+            # the comparison to `present` rows keeps NA out of it entirely.
+            levels: dict[Any, list[int]] = {}
+            for index in np.flatnonzero(present).tolist():
+                levels.setdefault(values[index], []).append(index)
+            for level, indices in levels.items():
+                mask = np.zeros(arr.size, dtype=bool)
+                mask[indices] = True
+                out.append((f"{column} == {level!r}", mask))
             out.extend(_missing_bin(column, present))
             continue
 
@@ -253,7 +273,7 @@ def _bin_conditions(
             operator = "<=" if last else "<"
             out.append((f"{low:g} <= {column} {operator} {high:g}", mask))
         out.extend(_missing_bin(column, present))
-    return out
+    return [(name, mask) for name, mask in out if not mask.all()]
 
 
 def _search(

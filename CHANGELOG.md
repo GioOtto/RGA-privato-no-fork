@@ -52,6 +52,29 @@ Versioning restarts at 1.0.0 for the fork; upstream's last release was 0.8.3
 
 ### Fixed
 
+- **`rga_parity` raised a bare `StopIteration` when every group scored the same
+  RGA.** The same `max()`/`min()` collapse that was fixed in `outcome_parity`
+  survived here untouched: both return the *first* extremal element, so a tie
+  put `best` on top of `worst`, `{best, worst}` became a one-element set, and
+  the widest-pair lookup found no pair. A model that ranks perfectly inside
+  every group (RGA 1.0 throughout) reaches it, and `rgbox_report` calls
+  `rga_parity` unguarded, so the whole report died with it. The ends now come
+  from an RGA-ordered list and the gap is reported as 0.
+- **A `pandas.NA` in a categorical column took `worst_cohort` down.**
+  `_bin_conditions` computed the `present` mask correctly and then still
+  broadcast `arr == level` over the whole column. `NA == "x"` is `NA`, not
+  `False`, so numpy asking for its truth value raised `TypeError: boolean value
+  of NA is ambiguous` — on `string` dtype, on `category`, and on a plain object
+  column, directly contradicting the docstring promise that `pandas.NA` joins
+  the `"<column> is missing"` bin. Levels are now grouped in a single pass over
+  the present rows, which never touches the missing ones. (`None`, float `NaN`
+  and Categorical `NaN` always worked.)
+- **A feature that was entirely missing, or constant, was reported as a
+  cohort.** Its single bin covered every row, so it scored a shortfall of 0
+  against itself and then intersected with every other bin at depth 2 to
+  produce an exact duplicate of that bin — 7 "cohorts searched" where 3 were
+  distinct, and a `top=10` list half-filled with copies. A bin holding the
+  whole sample is the sample, not a cohort, and is now dropped.
 - **One NaN turned a numeric feature into a categorical one in `worst_cohort`.**
   `as_1d_float` raises the same `InputError` for "this column is not numeric"
   and for "this numeric column contains a NaN", and `_bin_conditions` read the
@@ -436,7 +459,7 @@ Fork of `safeaipackage` 0.8.3. Written by an AI system; see the README.
   only inside the PyPI tarball and never in the repository.
 - `LICENSE` added for this fork's code, and `NOTICE.md` explains that the
   upstream project has none — a hard stop for third-party-software review at a
-  bank, and worth an email to the authors.
+  regulated institution, and worth an email to the authors.
 - GitHub Actions CI: 3.9–3.13 on Linux/macOS/Windows, a numpy-only install job,
   `ruff`, and a packaging check.
 - Upstream sources preserved verbatim under `upstream_reference/` for diffing;
