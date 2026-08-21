@@ -189,7 +189,22 @@ class CohortSearch:
         }
 
 
-def _missing_bin(column: Any, present: np.ndarray) -> list[tuple[str, np.ndarray]]:
+#: One candidate cohort condition: ``(feature_id, description, mask)``.
+#:
+#: ``feature_id`` is the position of the column the bin came from. It exists so
+#: that :func:`_search` can *skip* pairs of bins cut from the same feature
+#: instead of discovering that they do not intersect. A comment there had
+#: claimed the skip for some time while the representation carried no way to
+#: perform it, so every same-feature pair was still materialised as a full
+#: boolean AND and summed. At the default 4 bins those pairs are
+#: ``n_features * C(n_bins, 2)`` of the search - 6 of every 66 conditions for a
+#: 4-feature frame, and a strictly larger share for categorical columns, which
+#: get one bin per level and so can contribute hundreds of guaranteed-empty
+#: intersections each.
+Condition = tuple[int, str, np.ndarray]
+
+
+def _missing_bin(feature_id: int, column: Any, present: np.ndarray) -> list[Condition]:
     """A bin for the rows the feature says nothing about, if there are any.
 
     Missing gets its own bin rather than being dropped. "the rows where this
@@ -200,12 +215,10 @@ def _missing_bin(column: Any, present: np.ndarray) -> list[tuple[str, np.ndarray
     absent = ~present
     if not absent.any():
         return []
-    return [(f"{column} is missing", absent)]
+    return [(feature_id, f"{column} is missing", absent)]
 
 
-def _bin_conditions(
-    X: Any, columns: Sequence[Any], n_bins: int
-) -> list[tuple[str, np.ndarray]]:
+def _bin_conditions(X: Any, columns: Sequence[Any], n_bins: int) -> list[Condition]:
     """One boolean mask per (feature, bin), with a human-readable condition.
 
     A bin that holds every row is dropped: it is the whole sample under
@@ -214,8 +227,8 @@ def _bin_conditions(
     that bin - so ``top=10`` comes back half-filled with copies. A feature
     that is entirely missing, or constant, is what produces one.
     """
-    out: list[tuple[str, np.ndarray]] = []
-    for column in columns:
+    out: list[Condition] = []
+    for feature_id, column in enumerate(columns):
         raw = X[column]
         try:
             # allow_nan, and the reason matters: as_1d_float raises the same
@@ -250,23 +263,29 @@ def _bin_conditions(
             for level, indices in levels.items():
                 mask = np.zeros(arr.size, dtype=bool)
                 mask[indices] = True
-                out.append((f"{column} == {level!r}", mask))
-            out.extend(_missing_bin(column, present))
+                out.append((feature_id, f"{column} == {level!r}", mask))
+            out.extend(_missing_bin(feature_id, column, present))
             continue
 
         # Non-finite values carry no position on the scale, so they cannot sit
         # inside any interval; they are collected into the missing bin instead.
         present = np.isfinite(values)
         if not present.any():
-            out.extend(_missing_bin(column, present))
+            out.extend(_missing_bin(feature_id, column, present))
             continue
         observed = values[present]
 
         distinct = np.unique(observed)
         if distinct.size <= n_bins:
             for level in distinct:
-                out.append((f"{column} == {level:g}", present & (values == level)))
-            out.extend(_missing_bin(column, present))
+                out.append(
+                    (
+                        feature_id,
+                        f"{column} == {level:g}",
+                        present & (values == level),
+                    )
+                )
+            out.extend(_missing_bin(feature_id, column, present))
             continue
         # Quantile edges, deduplicated: a heavily tied column can collapse
         # several quantiles onto the same edge, which would make empty bins.
@@ -277,15 +296,15 @@ def _bin_conditions(
             mask = present & (values >= low)
             mask &= values <= high if last else values < high
             operator = "<=" if last else "<"
-            out.append((f"{low:g} <= {column} {operator} {high:g}", mask))
-        out.extend(_missing_bin(column, present))
-    return [(name, mask) for name, mask in out if not mask.all()]
+            out.append((feature_id, f"{low:g} <= {column} {operator} {high:g}", mask))
+        out.extend(_missing_bin(feature_id, column, present))
+    return [item for item in out if not item[2].all()]
 
 
 def _search(
     y: np.ndarray,
     yhat: np.ndarray,
-    conditions: list[tuple[str, np.ndarray]],
+    conditions: list[Condition],
     min_size: int,
     max_depth: int,
 ) -> list[tuple[tuple[str, ...], np.ndarray, int, float]]:
@@ -302,12 +321,19 @@ def _search(
             return  # single-class or degenerate cohort: nothing to report
         found.append((names, mask, size, value))
 
-    for i, (name_i, mask_i) in enumerate(conditions):
+    for i, (feature_i, name_i, mask_i) in enumerate(conditions):
         consider((name_i,), mask_i)
         if max_depth < 2:
             continue
-        for name_j, mask_j in conditions[i + 1 :]:
-            # Two bins of the same feature never intersect; skip the work.
+        for feature_j, name_j, mask_j in conditions[i + 1 :]:
+            # Two bins of the same feature partition its rows, so their
+            # intersection is empty by construction and there is no cohort
+            # there to find. Skipping on the id avoids allocating the AND and
+            # summing it only to learn what the binning already guarantees -
+            # which is what happened while this skip existed as a comment and
+            # nothing else, because the condition list carried no feature id.
+            if feature_i == feature_j:
+                continue
             combined = mask_i & mask_j
             if int(combined.sum()) < min_size:
                 continue
@@ -467,7 +493,10 @@ def worst_cohort(
         at_least_as_bad = 0
         for _ in range(n_permutations):
             shuffle = rng.permutation(y_arr.size)
-            permuted = [(name, mask[shuffle]) for name, mask in conditions]
+            permuted = [
+                (feature_id, name, mask[shuffle])
+                for feature_id, name, mask in conditions
+            ]
             null_found = _search(y_arr, yhat_arr, permuted, min_size, max_depth)
             if null_found and min(item[3] for item in null_found) <= observed:
                 at_least_as_bad += 1

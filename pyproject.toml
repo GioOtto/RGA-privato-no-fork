@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "safeaipackage-rgbox"
-version = "1.0.1"
+version = "1.0.2"
 description = "Rank Graduation Box (S.A.F.E. AI) metrics with statistical inference - a hardened fork of safeaipackage"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -50,7 +50,16 @@ pandas = ["pandas>=1.5"]
 # reproducible. Verified green at exactly 1.4.2.
 sklearn = ["scikit-learn>=1.4"]
 plots = ["matplotlib>=3.5"]
-all = ["pandas>=1.5", "scikit-learn>=1.4", "matplotlib>=3.5", "scipy>=1.8"]
+# What `examples/` actually needs on top of `all`. The notebook imports
+# matplotlib and seaborn and calls pd.read_excel on employee.xlsx, so it needs
+# an Excel engine too; none of the three was declared anywhere, and
+# environment.yml installs only `[dev]`, which has no matplotlib either. The
+# documented way to reproduce the examples therefore could not run them.
+examples = ["matplotlib>=3.5", "seaborn>=0.12", "openpyxl>=3.0"]
+all = [
+    "pandas>=1.5", "scikit-learn>=1.4", "matplotlib>=3.5", "scipy>=1.8",
+    "seaborn>=0.12", "openpyxl>=3.0",
+]
 dev = [
     "pandas>=1.5",
     "scikit-learn>=1.4",
@@ -61,7 +70,12 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/GolnooshBabaei/safeaipackage"
+# Homepage pointed at the *upstream* repository, so every "Homepage" link PyPI
+# renders for this distribution sent readers to a different project - one that
+# has none of this code, none of the inference layer and a different licence
+# situation (see NOTICE.md). Upstream keeps its own entry.
+Homepage = "https://github.com/GioOtto/RGA-privato-no-fork"
+Source = "https://github.com/GioOtto/RGA-privato-no-fork"
 Upstream = "https://github.com/GolnooshBabaei/safeaipackage"
 Paper = "https://doi.org/10.1016/j.eswa.2024.125239"
 

@@ -230,7 +230,7 @@ def resolve_columns(
     A ``set`` is **rejected**. It reads like a natural way to spell "these
     columns", but it has no order, and iteration order for strings varies with
     ``PYTHONHASHSEED`` - so the same call in two processes returned RGE and
-    Shapley values in different orders. This package promises byte-identical
+    Shapley values in different orders. This package promises reproducible
     re-runs, which a set cannot deliver.
     """
     if isinstance(columns, (set, frozenset)):

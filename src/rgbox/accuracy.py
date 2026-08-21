@@ -24,7 +24,6 @@ import numpy as np
 
 from ._ranks import average_ranks
 from ._validation import (
-    as_1d_float,
     as_group_labels,
     as_score_pair,
     check_count,
@@ -218,8 +217,20 @@ def rga_ovr(
     probability), and the summary is their average - ``"macro"`` for an
     unweighted mean, ``"weighted"`` for one weighted by class prevalence, in
     the spirit of Hand & Till.
+
+    Class labels do **not** have to be numeric. Every RGA computed here is
+    against a 0/1 one-vs-rest indicator, so the labels themselves are only ever
+    compared for equality and never ordered - which is the point of a one-vs-
+    rest decomposition on a nominal target. ``y`` was nevertheless pushed
+    through ``as_1d_float`` first, so ``["cat", "dog", "bird"]`` - the textbook
+    multiclass target, and what ``LabelEncoder``-free scikit-learn pipelines
+    hand back - was rejected with "RGA is defined on ordered values", a
+    restriction that applies to the target of ``rga`` and not to a class label
+    here. Only the indicator is converted now.
     """
-    y_arr = as_1d_float(y, "y")
+    y_arr = np.asarray(y)
+    if y_arr.ndim != 1:
+        raise InputError(f"'y' must be one-dimensional; got shape {y_arr.shape}.")
     proba_arr = np.asarray(proba, dtype=np.float64)
     if proba_arr.ndim != 2:
         raise InputError(

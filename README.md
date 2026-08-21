@@ -33,7 +33,7 @@ you to guess.
 > the scope and reviewed the output; a human did not type the code.
 >
 > The mathematics was derived and then **checked numerically** rather than
-> asserted: 354 tests, agreement with the original implementation to ~1e-16,
+> asserted: agreement with the original implementation to ~1e-16,
 > agreement of the analytic standard error with DeLong's estimator to 0.3%,
 > and confidence-interval coverage measured by simulation. What is verified is
 > stated as verified; what is not is listed in
@@ -53,7 +53,7 @@ you to guess.
 > risultato; non lo ha scritto a mano.
 >
 > La matematica è stata derivata e poi **verificata numericamente**, non
-> asserita: 354 test, accordo con l'implementazione originale a ~1e-16, accordo
+> asserita: accordo con l'implementazione originale a ~1e-16, accordo
 > dello standard error analitico con lo stimatore di DeLong allo 0.3%, e
 > copertura degli intervalli di confidenza misurata per simulazione. Ciò che è
 > verificato è dichiarato come tale; ciò che non lo è sta in
@@ -339,6 +339,11 @@ result.equalized_odds                   # the worse of the two
 result.disparate_impact                 # min/max selection rate, + four-fifths flag
 ```
 
+Since 1.0.2 `rgbox_report` reaches this too — pass `threshold=` or
+`decisions=`. Without one of them the report's fairness section holds only
+ranking measures, and says so under a **Not evaluated** heading rather than
+letting a reader take it for a completed fairness audit.
+
 Per-group **Wilson** intervals, a normal interval for each gap, a log-scale
 interval for the disparate-impact ratio — all closed form, so they cost nothing
 and are deterministic. Fairlearn has had bootstrap intervals for these since
@@ -388,8 +393,19 @@ report = rgbox_report(y=y_test, X_test=X_test, X_train=X_train, model=model,
 report.to_json(); report.to_markdown(); report.to_html()
 ```
 
-Seeded end to end, so re-running gives byte-identical output — which is what
-makes quarterly re-validations diffable.
+Seeded end to end, so re-running gives identical *numbers*. For a
+byte-identical *file* — which is what makes quarterly re-validations diffable —
+also pin the timestamp, which otherwise defaults to `datetime.now(utc)`:
+
+```python
+report = rgbox_report(..., random_state=0, generated_at="2026-03-31")
+```
+
+Pass `threshold=` (or `decisions=`) as well to get demographic parity, equal
+opportunity, equalised odds and disparate impact. Without one of them the
+report carries no outcome-based fairness at all and says so, in `warnings` and
+in the rendered document: RGA parity is AUC parity and does not stand in for
+any of them.
 
 ### scikit-learn
 
@@ -467,7 +483,7 @@ principle with no module.
 
 ```bash
 pip install -e ".[dev]"
-pytest                                    # 377 tests
+pytest                                    # the full suite
 python benchmarks/bench.py
 python examples/bank_model_validation.py
 ```

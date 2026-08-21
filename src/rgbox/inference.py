@@ -48,6 +48,35 @@ provided, and they agree:
 
 Coverage of the resulting 95% intervals is 0.92-0.95 across Gaussian, binary,
 heavy-tailed and heavily-tied designs (``tests/test_inference.py``).
+
+The assumption boundary: one row, one independent observation
+-------------------------------------------------------------
+All three estimators resample, delete or differentiate at the level of a single
+**row**, which assumes the rows are independent draws. That is the assumption,
+it is not checked, and it is the one most likely to be false on a real
+validation sample:
+
+* several facilities or accounts belonging to the same obligor or household;
+* a longitudinal panel - the same customer observed monthly;
+* overlapping performance windows on the same cohort;
+* branch, broker, region or portfolio clusters;
+* serial correlation in a time-ordered sample.
+
+Where it fails, it fails in one direction: the effective sample size is the
+number of independent *units*, not the number of rows, so every standard error
+here is too small and every interval too narrow. A sample of 10 000 rows drawn
+from 1 000 obligors carries roughly the information of 1 000, and an interval
+computed as if it carried 10 000 will be about three times too tight. The same
+applies to the p-values of :func:`rga_compare` and, downstream, to
+:func:`rgbox.rga_parity` and :func:`rgbox.worst_cohort`, which are built on
+these estimators.
+
+There is no cluster-aware estimator in this module yet (a cluster jackknife, a
+block or hierarchical bootstrap, or caller-supplied resampling units would each
+address it). Until there is: de-duplicate to one row per independent unit
+before calling these, or treat the intervals as a lower bound on the true
+uncertainty and say so in the report. ``docs/THEORY.md`` records this among the
+open questions.
 """
 
 from __future__ import annotations
@@ -173,8 +202,8 @@ def _leave_one_out_sums(values: np.ndarray, payload: np.ndarray) -> np.ndarray:
     return total - payload * ranks - above - 0.5 * (tied - payload)
 
 
-def jackknife_values(y: np.ndarray, yhat: np.ndarray) -> np.ndarray:
-    """All ``n`` delete-one RGA values, exactly, in ``O(n log n)``."""
+def _jackknife_values(y: np.ndarray, yhat: np.ndarray) -> np.ndarray:
+    """Unvalidated core of :func:`jackknife_values`; both arrays are float64."""
     n = y.size
     if n < 3:
         raise InsufficientDataError(
@@ -190,8 +219,8 @@ def jackknife_values(y: np.ndarray, yhat: np.ndarray) -> np.ndarray:
     return values
 
 
-def influence_values(y: np.ndarray, yhat: np.ndarray) -> np.ndarray:
-    """Empirical influence function of RGA at each observation.
+def _influence_values(y: np.ndarray, yhat: np.ndarray) -> np.ndarray:
+    """Unvalidated core of :func:`influence_values`; both arrays are float64.
 
     Uses the *mid-distribution* function ``F(v) = P(V < v) + P(V = v) / 2``,
     empirically ``(R(v) - 1/2) / n``, rather than the plain ``R(v) / n``. The
@@ -261,7 +290,7 @@ def _multinomial_rga(
         return 0.5 + numerator / (2.0 * denominator)
 
 
-def bootstrap_values(
+def _bootstrap_values(
     y: np.ndarray,
     yhat: np.ndarray,
     *,
@@ -270,13 +299,7 @@ def bootstrap_values(
     block_size: int | None = None,
     paired_with: np.ndarray | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-    """Bootstrap replicates of RGA (and optionally of a second, paired score).
-
-    ``paired_with`` reuses the same resampling weights for a second score
-    vector, which is what makes a champion/challenger comparison correct: the
-    two models are evaluated on the same bootstrap sample, so their strong
-    positive correlation is preserved instead of being thrown away.
-    """
+    """Unvalidated core of :func:`bootstrap_values`; all arrays are float64."""
     rng = np.random.default_rng(random_state)
     n = y.size
     n_resamples = check_count(n_resamples, "n_resamples")
@@ -317,6 +340,74 @@ def bootstrap_values(
     if secondary is not None:
         return primary, secondary
     return primary
+
+
+# --------------------------------------------------------------------------
+# public resampling API
+#
+# The three engines above take validated float64 arrays, because that is what
+# every internal caller already has and re-checking inside a loop over cohorts
+# or protected groups would be wasted work. They are also *exported*, and there
+# the same assumption was a defect: `jackknife_values([0, 1, 0], [.1, .9, .2])`
+# - a call the signature invites - died on `AttributeError: 'list' object has
+# no attribute 'size'`, and a length mismatch surfaced as a NumPy gufunc
+# core-dimension message from four frames down. This package's whole contract
+# is that bad input raises a typed rgbox error naming the argument, and these
+# were the three public functions that did not honour it.
+# --------------------------------------------------------------------------
+
+
+def jackknife_values(y: Any, yhat: Any) -> np.ndarray:
+    """All ``n`` delete-one RGA values, exactly, in ``O(n log n)``.
+
+    ``y`` and ``yhat`` are coerced and cross-checked exactly as
+    :func:`rga_ci` coerces them, so lists, pandas Series and mismatched lengths
+    behave the same here as they do everywhere else in the package.
+    """
+    y_arr, yhat_arr = as_score_pair(y, yhat, min_size=3)
+    return _jackknife_values(y_arr, yhat_arr)
+
+
+def influence_values(y: Any, yhat: Any) -> np.ndarray:
+    """Empirical influence function of RGA at each observation.
+
+    See :func:`_influence_values` for the mid-distribution convention and why
+    it is not the plain empirical CDF.
+    """
+    y_arr, yhat_arr = as_score_pair(y, yhat, min_size=3)
+    return _influence_values(y_arr, yhat_arr)
+
+
+def bootstrap_values(
+    y: Any,
+    yhat: Any,
+    *,
+    n_resamples: int = 2000,
+    random_state: Any = None,
+    block_size: int | None = None,
+    paired_with: Any = None,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Bootstrap replicates of RGA (and optionally of a second, paired score).
+
+    ``paired_with`` reuses the same resampling weights for a second score
+    vector, which is what makes a champion/challenger comparison correct: the
+    two models are evaluated on the same bootstrap sample, so their strong
+    positive correlation is preserved instead of being thrown away.
+    """
+    y_arr, yhat_arr = as_score_pair(y, yhat, min_size=3)
+    paired_arr = None
+    if paired_with is not None:
+        _, paired_arr = as_score_pair(
+            y_arr, paired_with, yhat_name="paired_with", min_size=3
+        )
+    return _bootstrap_values(
+        y_arr,
+        yhat_arr,
+        n_resamples=n_resamples,
+        random_state=random_state,
+        block_size=block_size,
+        paired_with=paired_arr,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -503,7 +594,7 @@ def rga_ci(
     z_crit = _normal_quantile(1.0 - (1.0 - level) / 2.0)
 
     if method == "jackknife":
-        values = jackknife_values(y_arr, yhat_arr)
+        values = _jackknife_values(y_arr, yhat_arr)
         if not np.all(np.isfinite(values)):
             raise UndefinedMetricError(
                 "some delete-one samples make RGA undefined (the target becomes "
@@ -532,7 +623,7 @@ def rga_ci(
         )
 
     if method == "influence":
-        values = influence_values(y_arr, yhat_arr)
+        values = _influence_values(y_arr, yhat_arr)
         standard_error = float(np.std(values, ddof=1)) / math.sqrt(n)
         kind = interval or "normal"
         if kind != "normal":
@@ -552,7 +643,7 @@ def rga_ci(
         )
 
     if method == "bootstrap":
-        replicates = bootstrap_values(
+        replicates = _bootstrap_values(
             y_arr, yhat_arr, n_resamples=n_resamples, random_state=random_state
         )
         finite = np.isfinite(replicates)
@@ -568,7 +659,7 @@ def rga_ci(
         if kind == "normal":
             low, high = point - z_crit * standard_error, point + z_crit * standard_error
         else:
-            jack = jackknife_values(y_arr, yhat_arr) if kind == "bca" else None
+            jack = _jackknife_values(y_arr, yhat_arr) if kind == "bca" else None
             if jack is not None and not np.all(np.isfinite(jack)):
                 jack = None
             low, high = _interval_from_replicates(replicates, point, level, kind, jack)
@@ -631,8 +722,8 @@ def rga_compare(
     if method == "jackknife":
         # Pseudo-values linearise the estimator; their paired difference has
         # the variance of the difference.
-        pseudo_a = n * point_a - (n - 1) * jackknife_values(y_arr, a_arr)
-        pseudo_b = n * point_b - (n - 1) * jackknife_values(y_arr, b_arr)
+        pseudo_a = n * point_a - (n - 1) * _jackknife_values(y_arr, a_arr)
+        pseudo_b = n * point_b - (n - 1) * _jackknife_values(y_arr, b_arr)
         delta = pseudo_a - pseudo_b
         if not np.all(np.isfinite(delta)):
             raise UndefinedMetricError(
@@ -640,10 +731,10 @@ def rga_compare(
             )
         standard_error = float(np.std(delta, ddof=1)) / math.sqrt(n)
     elif method == "influence":
-        delta = influence_values(y_arr, a_arr) - influence_values(y_arr, b_arr)
+        delta = _influence_values(y_arr, a_arr) - _influence_values(y_arr, b_arr)
         standard_error = float(np.std(delta, ddof=1)) / math.sqrt(n)
     elif method == "bootstrap":
-        rep_a, rep_b = bootstrap_values(
+        rep_a, rep_b = _bootstrap_values(
             y_arr,
             a_arr,
             n_resamples=n_resamples,

@@ -40,6 +40,7 @@ audit trail needs.
 | `README.md`, `MIGRATION.md`, `CHANGELOG.md`, this file | Written from scratch | MIT |
 | `upstream_reference/safeaipackage/` | **Verbatim upstream source**, kept only so the fork's behaviour can be diffed against it | Unlicensed — rights retained by the original authors |
 | `R_codes/*.R` | **Verbatim upstream source** | Unlicensed — rights retained by the original authors |
+| `R_codes/DEFECTS.md` | Written from scratch for this fork | MIT |
 | `examples/`, `examples/employee.xlsx` | Upstream | Unlicensed |
 
 No upstream source file was copied into `src/`. The implementations here were

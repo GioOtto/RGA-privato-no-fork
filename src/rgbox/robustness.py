@@ -264,12 +264,38 @@ def _perturbed_scores(
 
     ``rng`` is a live :class:`numpy.random.Generator`, threaded through rather
     than re-seeded per column: ``perturb`` passes it to ``default_rng``, which
-    returns a Generator unchanged, so the stream simply advances and each
-    column gets its own independent draw. The previous scheme derived a
-    per-column seed as ``int(random_state) + offset``, which raised
-    ``TypeError`` for the ``Generator`` that ``random_state`` is documented to
-    accept.
+    returns a Generator unchanged, so the stream simply advances. The previous
+    scheme derived a per-column seed as ``int(random_state) + offset``, which
+    raised ``TypeError`` for the ``Generator`` that ``random_state`` is
+    documented to accept.
+
+    ``kind="shuffle"`` on a **group** draws one permutation and applies it to
+    every column, exactly as :func:`rgbox.rge` does for ``method="permute"``.
+    Advancing the generator per column instead gave each column an independent
+    order, which fabricates rows that cannot exist: two independently shuffled
+    dummies of one attribute are both 1 at rate ``p_i * p_j`` - measured at 12%
+    of rows on a 45/30/25 attribute - so a group RGR was partly a measurement
+    of how the model responds to an obligor who lives in two regions at once.
+    Explainability had this right and robustness did not, for the same
+    encoding and the same reason.
+
+    ``"gaussian"`` and ``"tailswap"`` stay per column. Both are within-column
+    shocks whose joint meaning is not defined by a shared row order - a shared
+    permutation would not preserve a tail swap's structure - and neither
+    fabricates a categorical level that does not exist, because neither moves a
+    value out of the column it came from. What they do *not* do is preserve the
+    correlation between the group's columns: a jointly perturbed group is
+    perturbed one margin at a time. Read a group AURGR under those kinds as
+    "the model's sensitivity to independent shocks to each of these inputs",
+    not as a shock to their joint distribution.
     """
+    if kind == "shuffle" and len(columns) > 1:
+        order = np.random.default_rng(rng).permutation(len(X_test))
+        perturbed = X_test.copy()
+        for column in columns:
+            perturbed[column] = np.asarray(perturbed[column])[order]
+        return np.asarray(score_fn(perturbed), dtype=np.float64).ravel()
+
     perturbed = X_test
     for column in columns:
         perturbed = perturb(perturbed, column, magnitude, kind=kind, random_state=rng)
@@ -282,18 +308,42 @@ def _pool_across_draws(
     level: float,
     ci_method: str,
 ) -> RGAEstimate:
-    """Combine per-draw RGA intervals into one, by Rubin's rules.
+    """Combine per-draw RGA intervals into the interval for their mean.
 
-    ``m`` perturbation draws are ``m`` versions of the same analysis, so the
-    total variance is the within-draw sampling variance plus the between-draw
-    variance inflated by ``1 + 1/m``. With ``m == 1`` this reduces exactly to
-    the single draw's own interval, so the default path is unchanged.
+    The estimand
+    ------------
+    ``rgr`` reports ``mean(draws)``, whose target is the *expected* RGR over
+    the perturbation distribution, ``E_P[RGA(yhat, yhat_P)]``, on this
+    evaluation sample. The interval must be for that quantity, and by the law
+    of total variance
+
+    ``Var(mean) = Var_sample(E_P[RGR]) + Var_P(RGR) / m``,
+
+    estimated by ``W + B / m`` with ``W`` the mean of the per-draw sampling
+    variances and ``B`` the variance across draws. The Monte-Carlo term falls
+    away as ``m`` grows, which is the defining property of a quantity the
+    analyst can compute to any desired precision by drawing more perturbations.
+
+    Why not Rubin's rules
+    ---------------------
+    This used ``W + (1 + 1/m) B``, the multiple-imputation pooling rule, which
+    is the variance of a different estimand. Rubin's extra ``B`` is the
+    *irreducible* uncertainty left by data that were never observed: no number
+    of imputations recovers it, so the total does not converge to ``W``. A
+    perturbation draw is not missing data. It is a device this module chooses
+    and can repeat at will, so nothing about it is irreducible, and carrying a
+    full ``B`` forever overstated the width of every ``n_repeats > 1``
+    interval - conservatively, but for a quantity that is not the one printed
+    beside it.
+
+    ``m == 1`` gives ``B = 0`` under either rule, so the default path is
+    unchanged and only ``n_repeats > 1`` moves.
     """
     m = len(per_draw)
     point = float(np.mean(draws))
     within = float(np.mean([e.standard_error**2 for e in per_draw]))
     between = float(np.var(draws, ddof=1)) if m > 1 else 0.0
-    standard_error = math.sqrt(within + (1.0 + 1.0 / m) * between)
+    standard_error = math.sqrt(within + between / m)
     z_crit = _normal_quantile(1.0 - (1.0 - level) / 2.0)
     return RGAEstimate(
         estimate=point,
@@ -301,7 +351,7 @@ def _pool_across_draws(
         ci_low=point - z_crit * standard_error,
         ci_high=point + z_crit * standard_error,
         level=level,
-        method=ci_method if m == 1 else f"{ci_method} + {m} draws (Rubin)",
+        method=(ci_method if m == 1 else f"{ci_method} + {m} draws (total variance)"),
         interval="normal",
         n=per_draw[0].n,
         n_resamples=per_draw[0].n_resamples,
@@ -333,11 +383,18 @@ def rgr(
     to 1) for the deterministic ``"tailswap"``.
 
     With ``ci=True`` and ``n_repeats > 1`` the interval covers **both** sources
-    of noise, combined by Rubin's rules: the within-draw variance is the mean
-    of the per-draw sampling variances, and the between-draw variance is the
-    spread of RGR across perturbation draws. Reporting the interval of a single
-    draw next to a mean over ``m`` of them - as this did before 1.0.1 - states
-    an uncertainty for a quantity that is not the one in ``rgr``.
+    of noise, by the law of total variance: the within-draw sampling variance
+    plus the between-draw variance divided by ``m``. It is an interval for the
+    expected RGR over the perturbation distribution, which is what ``rgr``
+    reports. Reporting the interval of a single draw next to a mean over ``m``
+    of them - as this did before 1.0.1 - stated an uncertainty for a quantity
+    that is not the one in ``rgr``; pooling by Rubin's rules - as 1.0.1 did -
+    stated one for an estimand with an irreducible between-draw component,
+    which a perturbation the caller chooses does not have.
+
+    ``group=True`` with ``kind="shuffle"`` applies **one** permutation to the
+    whole group, so a one-hot encoded attribute stays a valid one-hot; the
+    other kinds perturb each column independently. See ``_perturbed_scores``.
 
     Every draw uses the same seed sequence regardless of which variable is
     being perturbed, so RGR values are comparable across variables (common

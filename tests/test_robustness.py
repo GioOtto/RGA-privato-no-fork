@@ -203,11 +203,44 @@ def test_pooled_interval_is_centred_on_the_reported_point(fitted_logit):
     assert result.estimate.estimate == pytest.approx(result.rgr)
     midpoint = (result.estimate.ci_low + result.estimate.ci_high) / 2
     assert midpoint == pytest.approx(result.rgr)
-    assert "Rubin" in result.estimate.method
+    assert "total variance" in result.estimate.method
+
+
+def test_pooled_variance_is_within_plus_between_over_m(fitted_logit):
+    """The estimand is the *mean* over draws, so the MC term carries a 1/m.
+
+    Pooling by Rubin's rules - ``W + (1 + 1/m) B`` - was the multiple-imputation
+    rule, whose extra ``B`` is the irreducible uncertainty of data that were
+    never observed. A perturbation draw is a device the caller can repeat at
+    will, so its contribution must vanish as ``m`` grows.
+    """
+    import numpy as np
+
+    from rgbox.inference import RGAEstimate
+    from rgbox.robustness import _pool_across_draws
+
+    draws = [0.60, 0.64, 0.70, 0.66]
+    per_draw = [
+        RGAEstimate(
+            estimate=value,
+            standard_error=0.02,
+            ci_low=value - 0.04,
+            ci_high=value + 0.04,
+            level=0.95,
+            method="jackknife",
+            interval="normal",
+            n=300,
+        )
+        for value in draws
+    ]
+    pooled = _pool_across_draws(per_draw, draws, 0.95, "jackknife")
+    m = len(draws)
+    expected = np.sqrt(0.02**2 + np.var(draws, ddof=1) / m)
+    assert pooled.standard_error == pytest.approx(expected)
 
 
 def test_pooled_interval_is_wider_than_a_single_draw(fitted_logit):
-    """Rubin's rules add the between-draw variance; ignoring it understates."""
+    """The between-draw variance still enters; ignoring it understates."""
     context = fitted_logit
     kwargs = {
         "yhat": context["yhat"],
@@ -225,7 +258,7 @@ def test_pooled_interval_is_wider_than_a_single_draw(fitted_logit):
     assert many.standard_error > one.standard_error
     # m == 1 must reduce exactly to the unpooled interval, so the default path
     # is untouched by the pooling.
-    assert "Rubin" not in one.method
+    assert "draws" not in one.method
 
 
 def test_tailswap_ignores_repeats_because_it_is_deterministic(fitted_logit):

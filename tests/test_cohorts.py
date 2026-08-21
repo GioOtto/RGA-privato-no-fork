@@ -198,7 +198,7 @@ def test_a_numeric_feature_with_a_nan_is_still_binned_as_numeric(rng):
     frame = pd.DataFrame({"f": values})
 
     conditions = _bin_conditions(frame, ["f"], 4)
-    labels = [name for name, _ in conditions]
+    labels = [name for _, name, _ in conditions]
     assert len(conditions) == 5, labels  # four quantile bins plus missing
     assert labels[-1] == "f is missing"
 
@@ -219,7 +219,7 @@ def test_every_row_lands_in_some_bin(rng):
 
     for column in ("num", "cat"):
         covered = np.zeros(n, dtype=bool)
-        for _, mask in _bin_conditions(frame, [column], 4):
+        for _, _, mask in _bin_conditions(frame, [column], 4):
             covered |= mask
         assert covered.all(), f"{column}: {int((~covered).sum())} rows in no bin"
 
@@ -270,7 +270,7 @@ def test_a_categorical_column_with_pandas_na_is_binned(rng):
             else pd.array(values, dtype=dtype)
         )
         frame = pd.DataFrame({"seg": column})
-        assert [name for name, _ in _bin_conditions(frame, ["seg"], 4)] == [
+        assert [name for _, name, _ in _bin_conditions(frame, ["seg"], 4)] == [
             "seg == 'x'",
             "seg == 'y'",
             "seg is missing",

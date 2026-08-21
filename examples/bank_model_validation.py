@@ -39,6 +39,10 @@ from rgbox import (
 )
 
 RANDOM_STATE = 20260811
+#: The as-of date of the validation, written into the report instead of the
+#: wall clock. A quarterly artefact is identified by its value date, and
+#: pinning it is what lets two runs be diffed line for line.
+VALUE_DATE = "2026-08-11"
 
 
 def build_portfolio(n: int = 6000) -> tuple[pd.DataFrame, np.ndarray]:
@@ -207,6 +211,14 @@ def main() -> None:
         yhat=champion_scores,
         variables=["income", "dti", "utilisation", "marketing_channel_id"],
         protected="gender", model_name="PD scorecard v3.1",
+        # Outcome-based fairness needs a decision, and there is deliberately no
+        # default cut-off. Without one the report says so rather than leaving
+        # the omission to be noticed.
+        threshold=0.5,
+        # Pinning the timestamp is what makes the artefact itself diffable:
+        # left to default it is datetime.now(), and two runs of an otherwise
+        # fully seeded report differ on that one line.
+        generated_at=VALUE_DATE,
         random_state=RANDOM_STATE,
     )
     from pathlib import Path
@@ -217,8 +229,10 @@ def main() -> None:
     (out / "validation.md").write_text(report.to_markdown(), encoding="utf-8")
     (out / "validation.html").write_text(report.to_html(), encoding="utf-8")
     print("   wrote reports/validation.{json,md,html}")
-    print("   Seeded throughout, so re-running produces byte-identical output -")
-    print("   which is what makes quarterly re-validations diffable.")
+    print("   Seeded throughout, and generated_at pinned to the value date, so")
+    print("   re-running produces byte-identical output - which is what makes")
+    print("   quarterly re-validations diffable. Leave generated_at unset and")
+    print("   the numbers still match, but the timestamp line will not.")
 
 
 if __name__ == "__main__":

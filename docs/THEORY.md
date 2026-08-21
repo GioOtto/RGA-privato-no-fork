@@ -587,6 +587,21 @@ Things this fork deliberately does not settle:
 * **Coverage below $n \approx 200$.** The intervals are asymptotic. A
   small-sample correction (or a systematic study of BCa versus $t$-bootstrap in
   this setting) is unfinished work.
+* **Clustered and time-dependent samples.** Every estimator in
+  `rgbox.inference` resamples, deletes or differentiates at the level of one
+  **row**, which assumes the rows are independent draws. On a real validation
+  sample they often are not: several facilities per obligor, a longitudinal
+  panel, overlapping performance windows, branch or region clusters, serial
+  correlation in a time-ordered extract. The failure is one-directional — the
+  effective sample size is the number of independent *units*, so a sample of
+  10 000 rows drawn from 1 000 obligors carries roughly the information of
+  1 000 and an interval computed as if it carried 10 000 is about $\sqrt{10}$
+  times too tight. It propagates to `rga_compare`, `rga_parity` and
+  `worst_cohort`, which are all built on these estimators. A cluster
+  jackknife, a block or hierarchical bootstrap, or caller-supplied resampling
+  units would each address it; none is implemented. Until one is, de-duplicate
+  to one row per independent unit, or read the intervals as a lower bound on
+  the true uncertainty and say so in the report.
 * **RGE with conditional imputation.** `method="mean"` and `"permute"` both
   break the joint distribution; `"retrain"` is expensive. Knockoffs or
   conditional sampling would be the principled middle ground. A group

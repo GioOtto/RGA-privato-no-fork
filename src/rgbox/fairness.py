@@ -99,9 +99,9 @@ from .core import rga
 from .exceptions import InputError, InsufficientDataError, UndefinedMetricError
 from .inference import (
     RGAEstimate,
+    _bootstrap_values,
     _normal_cdf,
     _normal_quantile,
-    bootstrap_values,
     rga_ci,
 )
 from .predictors import resolve_columns
@@ -309,7 +309,7 @@ def _stratified_gap_draws(
     """
     per_group = []
     for mask in masks:
-        replicates = bootstrap_values(
+        replicates = _bootstrap_values(
             y[mask], yhat[mask], n_resamples=n_resamples, random_state=rng
         )
         per_group.append(np.asarray(replicates, dtype=np.float64))
@@ -672,6 +672,7 @@ def proxy_leakage(
     candidates: Sequence[Any] | None = None,
     *,
     yhat: Any = None,
+    ordered: bool = False,
 ) -> dict[str, Any]:
     """Rank the predictors by how strongly each proxies for ``protected``.
 
@@ -698,9 +699,24 @@ def proxy_leakage(
         matter - ``leakage`` is ``|2·RGA - 1|``, so under a drop-first encoding
         a predictor that identifies the omitted reference level scores just as
         high, from the other side, on the dummies that are present.
+
+        A **single column holding more than two levels** is the case that
+        needs a decision from the caller, and ``ordered`` is where it is made.
+        A one-hot group was already decomposed level by level, but one integer
+        column was passed to RGA whole, which reads its codes as a scale:
+        relabelling ``{north: 0, centre: 1, south: 2}`` to
+        ``{centre: 0, north: 1, south: 2}`` is the same attribute and changed
+        the reported leakage from 0.623 to 0.596. See ``ordered``.
     candidates :
         Which columns to score. Defaults to every column of ``X`` except the
         protected attribute's own dummies.
+    ordered :
+        Whether a single multi-level column is genuinely ordinal. ``False``
+        (the default) decomposes it one-vs-rest, exactly as a one-hot group is
+        decomposed, so the answer no longer depends on how the levels happen to
+        be numbered. Pass ``True`` for an attribute whose codes really are a
+        scale - an age band, a rating grade - to score it in one pass against
+        that order. Binary and one-hot inputs are unaffected either way.
     yhat :
         Optional model scores on ``X``. When given, the result carries an extra
         ``model_leakage`` entry measuring how well the *model's own output*
@@ -730,6 +746,27 @@ def proxy_leakage(
     protected_values = {
         column: as_1d_float(X[column], f"X[{column!r}]") for column in protected_columns
     }
+    ordinal_note = ""
+    if len(protected_columns) == 1 and not ordered:
+        # One column, more than two levels: RGA would read the level codes as a
+        # scale, and a nominal attribute has none. Split it one-vs-rest so the
+        # result is invariant to how the levels are numbered - which is exactly
+        # what already happened to a one-hot encoded group.
+        (only_column,) = protected_columns
+        levels = np.unique(protected_values[only_column])
+        if levels.size > 2:
+            protected_values = {
+                f"{only_column} == {level:g}": (
+                    protected_values[only_column] == level
+                ).astype(np.float64)
+                for level in levels
+            }
+            ordinal_note = (
+                f"{only_column!r} has {levels.size} levels and was scored "
+                "one-vs-rest, so the reported leakage does not depend on how "
+                "the levels are numbered. Pass ordered=True to treat the codes "
+                "as a genuine scale instead."
+            )
     excluded = set(protected_columns)
     columns = (
         resolve_columns(candidates, X, "candidates")
@@ -786,7 +823,12 @@ def proxy_leakage(
         )
     rows.sort(key=lambda row: (row.get("leakage") is None, -(row.get("leakage") or 0)))
 
-    result: dict[str, Any] = {"protected": protected, "proxies": rows}
+    result: dict[str, Any] = {
+        "protected": protected,
+        "proxies": rows,
+        "ordered": ordered,
+        "ordinal_note": ordinal_note,
+    }
     if yhat is not None:
         scores = as_1d_float(yhat, "yhat")
         if scores.size != len(X):

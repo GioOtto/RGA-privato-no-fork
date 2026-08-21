@@ -57,7 +57,7 @@ def test_is_deterministic(fitted_logit):
 
 def test_json_roundtrips(report):
     payload = json.loads(report.to_json())
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert payload["metadata"]["model_name"] == "PD scorecard"
     assert payload["metadata"]["n"] == report.metadata["n"]
 

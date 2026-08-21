@@ -22,5 +22,7 @@ dependencies:
   - pip
   - pip:
       # `dev` pulls in pandas, scikit-learn, scipy, pytest, pytest-cov and
-      # ruff at the versions pyproject.toml declares.
-      - -e .[dev]
+      # ruff at the versions pyproject.toml declares; `examples` adds
+      # matplotlib, seaborn and openpyxl, without which examples/ - which the
+      # README tells you to run - cannot be executed from this environment.
+      - -e .[dev,examples]

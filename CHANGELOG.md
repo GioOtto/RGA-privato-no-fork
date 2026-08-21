@@ -4,6 +4,172 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning restarts at 1.0.0 for the fork; upstream's last release was 0.8.3
 (14 May 2025).
 
+## [1.0.2]
+
+Fourteen defects found auditing `3b20cdf`, verified independently against the
+running code before being fixed. The theme of this round is narrower than the
+last, and for a validation library worse: almost none of these raised, and none
+produced an obviously wrong number. They produced *interpretable-looking* ones.
+
+Regression tests are in `tests/test_audit_3b20cdf.py`; 21 of its 25 fail on
+`3b20cdf`, the other 4 being guards that the fixes changed nothing they should
+not have.
+
+### Fixed — reporting semantics
+
+- **The RGE table presented marginal importances as shares of a total.** Each
+  RGE was divided by the sum of the RGEs and rendered as a percentage under the
+  heading `share of total`. Marginal RGEs are not additive and not monotone in
+  the coalition — `rgbox.explainability`'s own docstring measures a pair whose
+  joint RGE (0.072) is *below both of its members* (0.638, 0.246) — so that sum
+  is not a total and a percentage of it is not a share of anything. Measured on
+  a two-predictor logistic fit: the marginals sum to 0.4045 while the actual
+  coalition worth is 0.4176, and the table said 99.7% / 0.3%. The column is
+  gone, replaced by the underlying `RGA(full vs reduced)` and a note pointing
+  at `rge_shapley()`, which is efficient by construction.
+- **`rgbox_report` had no way to compute outcome-based fairness, and did not
+  say so.** `outcome_parity` shipped in 1.0.1 and the report could not reach
+  it: there was no `decisions=` and no `threshold=`. "The full box" therefore
+  produced a fairness section made entirely of ranking measures — RGA parity,
+  RGF, proxy leakage — which reads as a completed fairness audit, in a document
+  whose own caveat says RGA parity must be reported *alongside* outcome
+  criteria and never instead of them. Both arguments now exist and drive
+  `outcome_parity`; without either, the omission is stated in `warnings` and
+  under a **Not evaluated** heading in the rendered artefact rather than left
+  to be inferred from a missing section. Schema version 1.0 → 1.1.
+- **`to_markdown` interpolated caller-supplied text straight into table rows.**
+  `to_html` escapes, so the stored-HTML-injection hole was closed in 1.0.1, but
+  the Markdown renderer was untouched. A group level, column label or model
+  name containing `|` split one cell into two and shifted every column after
+  it; one containing a newline ended the table and left the rest as body text;
+  one containing `\n## ` opened a heading in the report it was supposed to
+  title — and `to_html` renders the Markdown, so that heading became a real
+  `<h2>`. None of this needs malice: `"retail | north"` is an ordinary segment
+  name. Cells go through `_md_cell` (escapes pipes, collapses newlines) and
+  prose through `_md_text` (collapses newlines); `to_html` splits rows on
+  *unescaped* pipes only, so a label with a pipe survives the round trip as one
+  cell.
+
+### Fixed — statistics and measurement
+
+- **A perturbed group of columns was shuffled column by column.**
+  `rge(method="permute")` drew one shared row order for a group precisely so a
+  one-hot encoding stays valid; `rgr(group=True, kind="shuffle")` advanced a
+  live `Generator` per column, so each dummy got its own order. Two
+  independently shuffled dummies are both 1 at rate `p_i·p_j` — measured at
+  **12% of rows** on a 45/30/25 attribute — so a group RGR was partly a
+  measurement of the model's response to an obligor living in two regions at
+  once. `shuffle` on a group now applies one permutation to all of its columns.
+  `gaussian` and `tailswap` stay per column, and the docstring now says what
+  that does and does not preserve.
+- **Perturbation draws were pooled by Rubin's rules.** `rgr` reports the *mean*
+  RGR over `m` draws, whose estimand is `E_P[RGR]`, and by the law of total
+  variance the interval for that is `W + B/m`. Rubin's `W + (1 + 1/m)B` is the
+  multiple-imputation rule, whose extra `B` is the irreducible uncertainty of
+  data that were never observed — no number of imputations recovers it. A
+  perturbation draw is a device the caller chooses and can repeat at will, so
+  nothing about it is irreducible, and carrying a full `B` overstated the width
+  of every `n_repeats > 1` interval for a quantity that was not the one printed
+  beside it. `m == 1` is unchanged, so the default path does not move.
+- **`proxy_leakage` read a nominal attribute's level codes as a scale.** A
+  one-hot *group* was already decomposed level by level, but a single integer
+  column was handed to RGA whole. Relabelling `{north: 0, centre: 1, south: 2}`
+  to `{centre: 0, north: 1, south: 2}` is the same attribute and changed the
+  reported leakage from **0.623 to 0.596**. A single column with more than two
+  levels is now decomposed one-vs-rest by default, so the answer no longer
+  depends on the numbering; `ordered=True` scores it in one pass for an
+  attribute whose codes really are a scale. Binary and one-hot inputs are
+  unaffected. The result carries `ordered` and `ordinal_note`.
+
+### Fixed — API contract
+
+- **The three exported resampling helpers bypassed validation.**
+  `jackknife_values`, `influence_values` and `bootstrap_values` are public and
+  assumed pre-validated float64 arrays, so `jackknife_values([0, 1, 0], [.1,
+  .9, .2])` — a call the signature invites — died on `AttributeError: 'list'
+  object has no attribute 'size'`, and a length mismatch surfaced as a NumPy
+  gufunc core-dimension message. They now coerce and cross-check exactly as
+  `rga_ci` does, including `paired_with`. The unvalidated engines survive as
+  `_jackknife_values` / `_influence_values` / `_bootstrap_values` for the
+  internal callers that already hold validated arrays.
+- **`rga_ovr` rejected non-numeric class labels.** Every RGA it computes is
+  against a 0/1 one-vs-rest indicator, so the labels are only ever compared for
+  equality — the point of a one-vs-rest decomposition on a nominal target — but
+  `y` was pushed through `as_1d_float` first, so `["cat", "dog", "bird"]` was
+  refused with "RGA is defined on ordered values". Only the indicator is
+  converted now.
+- **`rgbox_report`'s timestamp made the artefact irreproducible, while three
+  places claimed the opposite.** `generated_at` was `datetime.now(utc)`, so two
+  runs of a fully seeded report were not byte-identical — the module docstring,
+  the README and the worked example all said they were, and the package's own
+  determinism test had to strip the metadata before comparing. `generated_at=`
+  now pins it; the example passes its value date and its output diffs clean
+  across runs. The three claims are corrected rather than repeated.
+
+### Fixed — performance
+
+- **The cohort search's same-feature skip was a comment and nothing else.**
+  `_search` said "two bins of the same feature never intersect; skip the work"
+  and then intersected them anyway, because the condition list carried no
+  feature id to skip on. Conditions are now `(feature_id, description, mask)`
+  and same-feature pairs are dropped before the boolean AND. At the default 4
+  bins that is 12 of every 28 pairs for a two-feature frame, and a strictly
+  larger share for categorical columns, which get one bin per level and can
+  contribute hundreds of guaranteed-empty intersections each — repeated for
+  every one of the 200 default permutations.
+
+### Fixed — packaging and documentation
+
+- **`examples/` could not be run from the environment that documents it.** The
+  notebook imports matplotlib and seaborn and calls `pd.read_excel`; `[dev]`
+  had no matplotlib, `[all]` had no seaborn, no Excel engine was declared
+  anywhere, and `environment.yml` installed only `[dev]`. There is now an
+  `examples` extra (matplotlib, seaborn, openpyxl), `[all]` includes them, and
+  `environment.yml` installs `.[dev,examples]`.
+- **`Homepage` pointed at the upstream repository.** Every "Homepage" link PyPI
+  renders for this distribution sent readers to a different project — one with
+  none of this code and a different licensing situation. It now points at the
+  fork; upstream keeps its own entry, and `Source` was added.
+- **The README quoted two different test counts.** One section said 354 tests
+  and another 377; the suite at `3b20cdf` had 447. Both hardcoded numbers are
+  gone rather than corrected, since the next commit would have invalidated them
+  again.
+- **The i.i.d. assumption was never stated.** Jackknife, influence function and
+  bootstrap all resample at the level of a single row, which assumes rows are
+  independent draws — commonly false on a validation sample with several
+  facilities per obligor, a longitudinal panel, overlapping performance windows
+  or branch clusters. It fails in one direction: the effective sample size is
+  the number of independent *units*, so every standard error is too small and
+  every interval too narrow, and the same applies downstream to `rga_parity`
+  and `worst_cohort`. `rgbox.inference`'s docstring now says so, with the
+  magnitude and what to do about it.
+- **The inherited R simulation scripts have four methodological defects and
+  carried no warning.** `R_codes/DEFECTS.md` documents them: the train/test
+  split of every replicate is stratified on the *last* generated dataset's `Y`
+  rather than its own, because the generation loop leaves `Y` bound as a global
+  (`Simulation_experiment_A.R:72`); the comment above it says 70/30 while the
+  code does `p = 0.8`; the ROBUSTNESS section overwrites `train[[r]]$X1..X4` in
+  place and the EXPLAINABILITY and FAIRNESS sections that follow read the
+  perturbed data, making the results depend on the order the script is run in;
+  and RGA is computed on `round(yhat, 4)`, which manufactures ties. The scripts
+  themselves are **not** modified — they are verbatim upstream material and, per
+  `NOTICE.md`, not covered by this fork's licence, so the findings are recorded
+  beside them instead.
+
+### Not changed, and why
+
+- **The unlicensed upstream material** (`upstream_reference/`, `R_codes/`,
+  `examples/employee.xlsx`) remains a genuine blocker for redistribution and
+  for third-party-software review at a regulated institution. It is already
+  documented in `NOTICE.md`, and resolving it needs a licence from the upstream
+  authors or a clean-room split of the repository — a decision, not a code
+  change.
+- **`hatchling>=1.21` keeps its open upper bound.** Capping a build backend
+  trades a rare forward-compatibility break for a guaranteed one at every
+  backend release; the CI job that caught the last such break is the right
+  mechanism. A release constraints file remains the better fix and is not done
+  here.
+
 ## [1.0.1]
 
 ### Fixed — statistics
