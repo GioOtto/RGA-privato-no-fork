@@ -178,6 +178,20 @@ Versioning restarts at 1.0.0 for the fork; upstream's last release was 0.8.3
   tags, which the action owner can repoint at any time, and `ruff`, `build` and
   `twine` are installed at pinned versions. The workflow declares
   `permissions: contents: read`.
+- **`twine check` rejected the wheel the build job had just produced.** The
+  build backend is uncapped (`hatchling>=1.21`), so each run resolves the
+  newest hatchling, and the core-metadata version it writes tracks its own
+  releases: 1.21 emits `Metadata-Version: 2.1`, 1.27 emits 2.4, 1.32 emits
+  2.5. `twine check` refuses any metadata version not on a list held inside
+  twine itself — a current transitive `packaging` does not help — so the
+  pinned twine 6.1.0 failed the `build` job with `'2.5' is not a valid
+  metadata version` on a commit that touched neither the package nor the
+  workflow. Pinned checker, floating backend: a break on a timer. twine moves
+  to **7.0.0**, the first release accepting 2.5, and the `build` job now
+  prints the generating backend and the metadata version *before* checking,
+  so the next such mismatch names the stale pin instead of only quoting a
+  number. Hatchling is deliberately still uncapped — it is also what users
+  build the sdist with.
 - The `minimal-install` job now also asserts `import safeaipackage` works — it
   only ever tested `import rgbox`, which is why the pandas-at-module-scope
   regression above went unnoticed — and the `build` job asserts `py.typed`

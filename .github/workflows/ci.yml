@@ -20,10 +20,27 @@ permissions:
 # an action repository lands in this pipeline with no change on our side. The
 # trailing comment records which release each SHA was, so bumping stays
 # readable in a diff.
+#
+# TWINE_VERSION is load-bearing in a way the other two are not. The build
+# backend is deliberately uncapped (`hatchling>=1.21`), so `python -m build`
+# resolves the newest hatchling every run, and each hatchling generation emits
+# a newer core-metadata version: 1.21 wrote Metadata-Version 2.1, 1.27 wrote
+# 2.4, 1.32 writes 2.5. `twine check` refuses any metadata version it does not
+# know about - and that list lives in twine itself, not in `packaging`, so a
+# fresh transitive `packaging` does not save it. twine 6.1.0 rejected the 2.5
+# metadata hatchling 1.32 produced, failing this job on a commit that changed
+# neither the package nor the workflow. 7.0.0 is the first release that
+# accepts 2.5.
+#
+# A pinned checker against a floating backend is a break on a timer, so the
+# `build` job prints both versions before checking: when hatchling starts
+# emitting 2.6 the log will say which pin is stale instead of just quoting a
+# number. Capping hatchling instead would be the wrong trade - it is also what
+# users build the sdist with.
 env:
   RUFF_VERSION: "0.12.0"
   BUILD_VERSION: "1.2.2"
-  TWINE_VERSION: "6.1.0"
+  TWINE_VERSION: "7.0.0" # >= 7 to accept core metadata 2.5; needs Python >= 3.10
 
 jobs:
   test:
@@ -153,6 +170,25 @@ jobs:
         with: { python-version: "3.11" }
       - run: pip install "build==${BUILD_VERSION}" "twine==${TWINE_VERSION}"
       - run: python -m build
+      - name: Record what built the artefacts and which metadata version it wrote
+        # `twine check` only reports the number it rejected, never where that
+        # number came from. Both halves of the pair are printed here so the
+        # next mismatch is a one-line diagnosis rather than an investigation.
+        run: |
+          python - <<'PY'
+          import glob, re, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          archive = zipfile.ZipFile(wheel)
+          metadata = archive.read(
+              next(n for n in archive.namelist() if n.endswith(".dist-info/METADATA"))
+          ).decode()
+          version = re.search(r"^Metadata-Version: (.+)$", metadata, re.M).group(1)
+          generator = re.search(r"^Generator: (.+)$", archive.read(
+              next(n for n in archive.namelist() if n.endswith(".dist-info/WHEEL"))
+          ).decode(), re.M)
+          print(f"built by: {generator.group(1) if generator else 'unknown'}")
+          print(f"core metadata version: {version}")
+          PY
       - run: twine check dist/*
       - name: The PEP 561 marker must be in the wheel, not just in the tree
         run: |
