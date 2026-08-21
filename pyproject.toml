@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "safeaipackage-rgbox"
-version = "1.0.0"
+version = "1.0.1"
 description = "Rank Graduation Box (S.A.F.E. AI) metrics with statistical inference - a hardened fork of safeaipackage"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -40,12 +40,20 @@ dependencies = ["numpy>=1.22"]
 # Needed for the DataFrame-based workflows (RGE/RGR/fairness) and for the
 # legacy `safeaipackage` compatibility layer.
 pandas = ["pandas>=1.5"]
-sklearn = ["scikit-learn>=1.0"]
+# scikit-learn>=1.4, raised from >=1.0 in 1.0.1 once the `minimum-dependencies`
+# CI job started testing the floors instead of asserting them. Two things break
+# below 1.4: `make_scorer` gained `response_method` there (older versions
+# forward the unknown keyword to the *metric*, so the scorer built fine and
+# then failed at scoring time - a column of NaN inside `cross_val_score`), and
+# lbfgs used a looser stopping rule, so a logistic fit on unscaled data
+# terminates somewhere else entirely and the explainability results are not
+# reproducible. Verified green at exactly 1.4.2.
+sklearn = ["scikit-learn>=1.4"]
 plots = ["matplotlib>=3.5"]
-all = ["pandas>=1.5", "scikit-learn>=1.0", "matplotlib>=3.5", "scipy>=1.8"]
+all = ["pandas>=1.5", "scikit-learn>=1.4", "matplotlib>=3.5", "scipy>=1.8"]
 dev = [
     "pandas>=1.5",
-    "scikit-learn>=1.0",
+    "scikit-learn>=1.4",
     "scipy>=1.8",
     "pytest>=7.0",
     "pytest-cov>=4.0",

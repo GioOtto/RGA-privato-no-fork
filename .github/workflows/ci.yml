@@ -10,6 +10,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Nothing here writes to the repository. Declaring it explicitly means the
+# default token scope cannot widen underneath us if the org default changes.
+permissions:
+  contents: read
+
+# Actions are pinned to commit SHAs, not to moving major tags: `@v5` is a tag
+# the upstream owner can repoint at any time, so a supply-chain compromise of
+# an action repository lands in this pipeline with no change on our side. The
+# trailing comment records which release each SHA was, so bumping stays
+# readable in a diff.
+env:
+  RUFF_VERSION: "0.12.0"
+  BUILD_VERSION: "1.2.2"
+  TWINE_VERSION: "6.1.0"
+
 jobs:
   test:
     name: py${{ matrix.python }} / ${{ matrix.os }}
@@ -25,22 +40,52 @@ jobs:
           - { os: macos-latest, python: "3.11" }
           - { os: windows-latest, python: "3.11" }
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
+      - run: pip freeze
       - name: Run tests
         run: pytest -q --cov=rgbox --cov=safeaipackage --cov-report=term-missing
+
+  minimum-dependencies:
+    # The floors in pyproject.toml are a promise, and the job above tests none
+    # of it: it installs whatever pip resolves today, which is always the
+    # newest. This installs exactly the lower bounds that are declared, so a
+    # feature that silently requires a newer numpy fails here rather than in
+    # somebody's pinned production environment.
+    #
+    # It earned its place on the first run: the declared scipy>=1.8 floor broke
+    # `accuracy_report` outright (`kendalltau(...).statistic` is 1.9+), and the
+    # declared scikit-learn>=1.0 floor turned every `make_rga_scorer()` score
+    # into NaN. The first is fixed; the second moved the floor to 1.4, which is
+    # what this job now pins.
+    name: oldest supported dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          # The oldest interpreter the floors are actually installable on.
+          python-version: "3.10"
+      - name: Install the declared minimum of every dependency
+        run: |
+          pip install -e .
+          pip install \
+            "numpy==1.22.*" "pandas==1.5.*" "scikit-learn==1.4.*" \
+            "scipy==1.8.*" "pytest==7.0.*" "pytest-cov==4.0.*"
+      - run: pip freeze
+      - run: pytest -q
 
   minimal-install:
     name: numpy-only install
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with: { python-version: "3.11" }
       # The core must work with nothing but numpy. Upstream's core module could
       # not be imported without CatBoost and XGBoost; this job is the guard
@@ -69,27 +114,57 @@ jobs:
           print(rga_compare(y, a, b))
           print(rga_test(y, a)["p_value"])
           PY
+      - name: The other top-level package in the wheel must import too
+        # This job only ever tested `import rgbox`, so it did not notice that
+        # `import safeaipackage` raised ModuleNotFoundError: pandas on exactly
+        # the install it is here to defend.
+        run: |
+          python - <<'PY'
+          import os, warnings
+          os.environ["SAFEAIPACKAGE_SILENCE_FORK_NOTICE"] = "1"
+          import numpy as np
+          import safeaipackage
+          from safeaipackage.core import rga
+          print(safeaipackage.__version__, rga([0.0, 0, 1, 1], [0.1, 0.4, 0.35, 0.8]))
+          try:
+              safeaipackage.compute_rge_values
+          except ImportError as exc:
+              assert "pandas" in str(exc), exc
+              print("pandas-only attribute reports the missing extra:", exc)
+          else:
+              raise AssertionError("expected an ImportError naming pandas")
+          PY
 
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with: { python-version: "3.11" }
-      - run: pip install ruff
+      - run: pip install "ruff==${RUFF_VERSION}"
       - run: ruff check src tests
       - run: ruff format --check src tests
 
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with: { python-version: "3.11" }
-      - run: pip install build twine
+      - run: pip install "build==${BUILD_VERSION}" "twine==${TWINE_VERSION}"
       - run: python -m build
       - run: twine check dist/*
-      - uses: actions/upload-artifact@v5
+      - name: The PEP 561 marker must be in the wheel, not just in the tree
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          names = set(zipfile.ZipFile(wheel).namelist())
+          for package in ("rgbox", "safeaipackage"):
+              assert f"{package}/py.typed" in names, f"{package}/py.typed missing from {wheel}"
+          print("py.typed present for both packages")
+          PY
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: dist
           path: dist/

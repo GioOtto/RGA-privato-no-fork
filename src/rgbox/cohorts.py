@@ -78,7 +78,13 @@ from typing import Any
 
 import numpy as np
 
-from ._validation import as_1d_float, as_score_pair, check_level, is_missing
+from ._validation import (
+    as_1d_float,
+    as_score_pair,
+    check_count,
+    check_level,
+    is_missing,
+)
 from .core import rga
 from .exceptions import InputError, UndefinedMetricError
 from .inference import rga_ci
@@ -355,11 +361,17 @@ def worst_cohort(
         RGA of 0.2 out of pure noise, and it is the whole point of this
         function that it will find it.
     top :
-        How many of the worst cohorts to return.
+        How many of the worst cohorts to return. Must be at least 1.
     n_permutations :
-        Permutations of the score used to calibrate ``p_value``. Set to 0 to
-        skip it - which is only sensible if you intend to treat the result as
-        exploratory and never quote a number from it.
+        Permutations of the **cohort definitions** used to calibrate
+        ``p_value`` - row *i*'s features are reassigned to another row, which
+        holds every cohort size, every overlap and the overall RGA fixed and
+        destroys only the link between membership and being ranked badly. This
+        said "permutations of the score" until 1.0.1, describing a null the
+        code deliberately does not use and which ``SELECTION_NOTE`` on the
+        result already argued against; see the module docstring for why.
+        Set to 0 to skip it - which is only sensible if you intend to treat the
+        result as exploratory and never quote a number from it.
     ci :
         Attach a per-cohort confidence interval. These are *not* corrected for
         the search; ``p_value`` is what accounts for it.
@@ -385,6 +397,14 @@ def worst_cohort(
     """
     y_arr, yhat_arr = as_score_pair(y, yhat, min_size=3)
     level = check_level(level)
+    # Each of these fed something that failed silently rather than loudly:
+    # `top=-1` returned every cohort *except the best one*, `n_permutations=-1`
+    # skipped the loop and then divided by `-1 + 1`, and `n_bins` below 2 made
+    # `_bin_conditions` emit nothing at all for every numeric feature, so the
+    # search reported "no cohort was found" having looked at none.
+    top = check_count(top, "top")
+    n_permutations = check_count(n_permutations, "n_permutations", minimum=0)
+    n_bins = check_count(n_bins, "n_bins", minimum=2)
     if max_depth not in (1, 2):
         raise InputError(f"'max_depth' must be 1 or 2; got {max_depth!r}.")
     if min_size < 3:

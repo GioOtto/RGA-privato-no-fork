@@ -13,6 +13,7 @@ runs on the same data produce byte-identical output.
 
 from __future__ import annotations
 
+import html
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .accuracy import accuracy_report
-from .exceptions import InputError
+from .exceptions import RGBoxError
 from .explainability import rge
 from .fairness import labels_from_dummies, proxy_leakage, rga_parity, rgf
 from .predictors import predict_scores, resolve_columns
@@ -29,6 +30,11 @@ from .robustness import rgr_curve
 __all__ = ["RGBoxReport", "rgbox_report"]
 
 _SCHEMA_VERSION = "1.0"
+
+
+def _escape(text: str) -> str:
+    """HTML-escape one text fragment, quotes included."""
+    return html.escape(str(text), quote=True)
 
 
 @dataclass
@@ -58,10 +64,28 @@ class RGBoxReport:
         kwargs.setdefault("default", str)
         return json.dumps(self.to_dict(), **kwargs)
 
+    @property
+    def _ci_label(self) -> str:
+        """``"95% CI"``, or whatever level was actually used.
+
+        This was the literal string ``"95% CI"`` in every heading and every
+        parenthesis, while ``level=`` was passed faithfully to the estimators.
+        A report computed at 90% was therefore labelled as a 95% one - the
+        numbers right, the caption wrong, in the artefact whose whole purpose
+        is to be quoted.
+        """
+        level = self.metadata.get("level", 0.95)
+        percent = level * 100.0
+        text = (
+            f"{percent:.0f}" if abs(percent - round(percent)) < 1e-9 else f"{percent:g}"
+        )
+        return f"{text}% CI"
+
     def to_markdown(self) -> str:
         out: list[str] = []
         add = out.append
         meta = self.metadata
+        ci_label = self._ci_label
         add(f"# Rank Graduation Box report - {meta.get('model_name', 'model')}")
         add("")
         add(f"- generated: {meta.get('generated_at')}")
@@ -74,7 +98,7 @@ class RGBoxReport:
         rga_block = acc["rga"]
         add("## Accuracy")
         add("")
-        add("| metric | value | 95% CI |")
+        add(f"| metric | value | {ci_label} |")
         add("|---|---|---|")
         add(
             f"| RGA | {rga_block['rga']:.4f} | "
@@ -124,7 +148,7 @@ class RGBoxReport:
             if parity:
                 add(f"Protected attribute: `{parity.get('attribute')}`")
                 add("")
-                add("| group | n | RGA | 95% CI | in gap |")
+                add(f"| group | n | RGA | {ci_label} | in gap |")
                 add("|---|---|---|---|---|")
                 for group in parity["groups"]:
                     if group["rga"] is None:
@@ -141,7 +165,7 @@ class RGBoxReport:
                     ci = ""
                     if parity["gap_ci_low"] is not None:
                         ci = (
-                            f" (95% CI {parity['gap_ci_low']:.4f} - "
+                            f" ({ci_label} {parity['gap_ci_low']:.4f} - "
                             f"{parity['gap_ci_high']:.4f})"
                         )
                     add(
@@ -226,7 +250,16 @@ class RGBoxReport:
         return "\n".join(out)
 
     def to_html(self) -> str:
-        """Minimal self-contained HTML rendering of the markdown."""
+        """Minimal self-contained HTML rendering of the markdown.
+
+        Every piece of text is escaped. Almost all of it is numbers this module
+        formatted itself, but not all: model names, column labels, group levels
+        and warning text come from the caller's data, and none of that is under
+        this package's control. Interpolated raw, a level spelled
+        ``<img src=x onerror=...>`` in a protected attribute stopped being a
+        table cell and became markup the moment somebody opened the report -
+        stored HTML injection, in a document produced to be circulated.
+        """
         body: list[str] = []
         in_table = False
         for line in self.to_markdown().splitlines():
@@ -241,24 +274,24 @@ class RGBoxReport:
                     tag = "th"
                 else:
                     tag = "td"
-                row = "".join(f"<{tag}>{c}</{tag}>" for c in cells)
+                row = "".join(f"<{tag}>{_escape(c)}</{tag}>" for c in cells)
                 body.append(f"<tr>{row}</tr>")
                 continue
             if in_table:
                 body.append("</table>")
                 in_table = False
             if stripped.startswith("### "):
-                body.append(f"<h3>{stripped[4:]}</h3>")
+                body.append(f"<h3>{_escape(stripped[4:])}</h3>")
             elif stripped.startswith("## "):
-                body.append(f"<h2>{stripped[3:]}</h2>")
+                body.append(f"<h2>{_escape(stripped[3:])}</h2>")
             elif stripped.startswith("# "):
-                body.append(f"<h1>{stripped[2:]}</h1>")
+                body.append(f"<h1>{_escape(stripped[2:])}</h1>")
             elif stripped.startswith("> "):
-                body.append(f"<blockquote>{stripped[2:]}</blockquote>")
+                body.append(f"<blockquote>{_escape(stripped[2:])}</blockquote>")
             elif stripped.startswith("- "):
-                body.append(f"<li>{stripped[2:]}</li>")
+                body.append(f"<li>{_escape(stripped[2:])}</li>")
             elif stripped:
-                body.append(f"<p>{stripped}</p>")
+                body.append(f"<p>{_escape(stripped)}</p>")
         if in_table:
             body.append("</table>")
         style = (
@@ -314,6 +347,28 @@ def rgbox_report(
     from . import __version__
 
     warnings: list[str] = []
+
+    def section(name: str, build):
+        """Run one section; on a typed failure, note it and carry on.
+
+        Accuracy is deliberately *not* wrapped: it is the report, and a report
+        with no accuracy block is not a partial report but a failed one.
+        Everything else is a section that can be missing.
+
+        This boundary existed only around proxy leakage, so any other section
+        raising took the whole run with it - a single string column among
+        ``variables`` reached ``perturb``'s numeric check and destroyed the
+        accuracy, explainability and fairness blocks that had already been
+        computed. Only :class:`rgbox.RGBoxError` is caught: a TypeError or a
+        MemoryError from inside a user-supplied model is a bug, not a section
+        that does not apply, and swallowing it would be worse than the crash.
+        """
+        try:
+            return build()
+        except RGBoxError as exc:
+            warnings.append(f"{name} skipped: {exc}")
+            return None
+
     if yhat is None:
         yhat = predict_scores(
             model, X_test, pos_label=pos_label, greater_is_better=greater_is_better
@@ -330,38 +385,50 @@ def rgbox_report(
 
     explainability: list[dict[str, Any]] = []
     if variables and X_train is not None:
-        explainability = [
-            item.to_dict()
-            for item in rge(
-                X_train,
-                X_test,
-                model,
-                list(variables),
-                yhat=yhat,
-                method=rge_method,
-                pos_label=pos_label,
-                greater_is_better=greater_is_better,
-                random_state=random_state,
+        explainability = (
+            section(
+                "explainability",
+                lambda: [
+                    item.to_dict()
+                    for item in rge(
+                        X_train,
+                        X_test,
+                        model,
+                        list(variables),
+                        yhat=yhat,
+                        method=rge_method,
+                        pos_label=pos_label,
+                        greater_is_better=greater_is_better,
+                        random_state=random_state,
+                    )
+                ],
             )
-        ]
+            or []
+        )
     elif variables:
         warnings.append("explainability skipped: X_train was not supplied.")
 
     robustness: list[dict[str, Any]] = []
     if variables:
-        robustness = [
-            curve.to_dict()
-            for curve in rgr_curve(
-                X_test,
-                model,
-                list(variables),
-                yhat=yhat,
-                kind=perturbation_kind,
-                pos_label=pos_label,
-                greater_is_better=greater_is_better,
-                random_state=random_state,
+        robustness = (
+            section(
+                "robustness",
+                lambda: [
+                    curve.to_dict()
+                    for curve in rgr_curve(
+                        X_test,
+                        model,
+                        list(variables),
+                        yhat=yhat,
+                        kind=perturbation_kind,
+                        pos_label=pos_label,
+                        greater_is_better=greater_is_better,
+                        random_state=random_state,
+                    )
+                ],
             )
-        ]
+            or []
+        )
     else:
         warnings.append("explainability and robustness skipped: no 'variables'.")
 
@@ -376,44 +443,54 @@ def rgbox_report(
             if len(protected_columns) == 1
             else labels_from_dummies(X_test, protected_columns)
         )
-        block["rga_parity"] = rga_parity(
-            y,
-            yhat,
-            group_values,
-            min_group_size=min_group_size,
-            level=level,
-            method=ci_method,
-            n_resamples=n_resamples,
-            random_state=random_state,
-            attribute=protected,
-        ).to_dict()
-        if X_train is not None:
-            block["rgf"] = rgf(
-                X_train,
-                X_test,
-                model,
-                protected,
-                yhat=yhat,
-                method=rge_method,
-                pos_label=pos_label,
-                greater_is_better=greater_is_better,
+        parity = section(
+            "RGA parity",
+            lambda: rga_parity(
+                y,
+                yhat,
+                group_values,
+                min_group_size=min_group_size,
+                level=level,
+                method=ci_method,
+                n_resamples=n_resamples,
                 random_state=random_state,
+                attribute=protected,
+            ).to_dict(),
+        )
+        if parity is not None:
+            block["rga_parity"] = parity
+            if parity["gap"] is None:
+                warnings.append(
+                    "RGA parity gap not computable: fewer than two groups met "
+                    f"min_group_size={min_group_size}."
+                )
+        if X_train is not None:
+            rgf_block = section(
+                "RGF",
+                lambda: rgf(
+                    X_train,
+                    X_test,
+                    model,
+                    protected,
+                    yhat=yhat,
+                    method=rge_method,
+                    pos_label=pos_label,
+                    greater_is_better=greater_is_better,
+                    random_state=random_state,
+                ),
             )
+            if rgf_block is not None:
+                block["rgf"] = rgf_block
         # Proxy leakage needs the protected attribute to be *numeric*, because
         # it ranks it with RGA. The rest of the fairness block does not - a
         # string column is a perfectly ordinary grouping variable for
         # rga_parity - so a categorical attribute must cost the report this
         # one section, not the whole run.
-        try:
-            block["proxy_leakage"] = proxy_leakage(X_test, protected, yhat=yhat)
-        except InputError as exc:
-            warnings.append(f"proxy leakage skipped: {exc}")
-        gap = block["rga_parity"]["gap"]
-        if gap is None:
-            warnings.append(
-                "RGA parity gap not computable: fewer than two groups met "
-                f"min_group_size={min_group_size}."
-            )
+        leakage = section(
+            "proxy leakage", lambda: proxy_leakage(X_test, protected, yhat=yhat)
+        )
+        if leakage is not None:
+            block["proxy_leakage"] = leakage
         fairness = block
 
     metadata = {

@@ -47,6 +47,43 @@ def test_requirements_matches_the_dev_extra():
     assert _requirements() == expected
 
 
+def test_the_declared_version_is_the_one_the_package_reports():
+    """Three places said different things.
+
+    Six source files documented behaviour changes "in 1.0.1" while
+    pyproject.toml and `rgbox.__version__` both said 1.0.0 and the changelog
+    filed those changes under `[Unreleased]`. For anything audited, "which
+    version is this behaviour in" has to have one answer.
+    """
+    import rgbox
+
+    declared = _pyproject()["project"]["version"]
+    assert rgbox.__version__ == declared
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert f"## [{declared}]" in changelog
+    assert "## [Unreleased]" not in changelog
+
+
+def test_the_compatibility_layer_reports_the_same_version():
+    import rgbox
+    import safeaipackage
+
+    assert safeaipackage.__version__ == rgbox.__version__
+
+
+@pytest.mark.parametrize("package", ["rgbox", "safeaipackage"])
+def test_the_pep_561_marker_exists(package):
+    """The `Typing :: Typed` classifier was a claim with nothing behind it.
+
+    Without `py.typed` in the installed package, mypy and pyright ignore every
+    annotation in it - the classifier promises checkable types and the
+    distribution shipped none. The CI build job asserts the same thing about
+    the built wheel, which is what consumers actually install.
+    """
+    assert "Typing :: Typed" in _pyproject()["project"]["classifiers"]
+    assert (ROOT / "src" / package / "py.typed").is_file()
+
+
 def test_numpy_is_still_the_only_hard_dependency():
     """The whole point of the fork: `pip install rgbox` pulls in numpy alone.
 

@@ -27,6 +27,8 @@ from ._validation import (
     as_1d_float,
     as_group_labels,
     as_score_pair,
+    check_count,
+    check_finite_scalar,
     check_level,
     distinct_levels,
 )
@@ -86,7 +88,15 @@ def _kendall(y: np.ndarray, yhat: np.ndarray) -> float | None:
         from scipy.stats import kendalltau
     except ImportError:
         return None
-    return float(kendalltau(y, yhat).statistic)
+    result = kendalltau(y, yhat)
+    # `.statistic` arrived in SciPy 1.9; before that the field was called
+    # `.correlation`, and it is still kept as an alias. pyproject declares a
+    # floor of scipy>=1.8, so reading only the new name raised AttributeError
+    # on an install that satisfied every constraint the package states.
+    statistic = getattr(result, "statistic", None)
+    if statistic is None:
+        statistic = result.correlation
+    return float(statistic)
 
 
 @dataclass(frozen=True)
@@ -410,6 +420,21 @@ def contamination_curve(
     from the uncontaminated sample.
     """
     y_arr, yhat_arr = as_score_pair(y, yhat, min_size=10)
+    n_repeats = check_count(n_repeats, "n_repeats")
+    magnitude = check_finite_scalar(magnitude, "magnitude")
+    fractions = [check_finite_scalar(f, "fractions") for f in fractions]
+    # A fraction outside [0, 1] reached `rng.choice(n, size=round(f * n),
+    # replace=False)` and surfaced as "Cannot take a larger sample than
+    # population" or "negative dimensions are not allowed" - NumPy's words
+    # about NumPy's arguments, several frames below anything the caller wrote.
+    outside = [f for f in fractions if not 0.0 <= f <= 1.0]
+    if outside:
+        raise InputError(
+            f"'fractions' must lie in [0, 1]; got {outside!r}. Each one is the "
+            "share of targets to replace with an outlier."
+        )
+    if not fractions:
+        raise InputError("'fractions' is empty; there is no curve to trace.")
     rng = np.random.default_rng(random_state)
     spread = float(np.std(y_arr))
     clean_rga = rga(y_arr, yhat_arr)

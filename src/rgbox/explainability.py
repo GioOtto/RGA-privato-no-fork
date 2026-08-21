@@ -76,7 +76,7 @@ from typing import Any, Callable, Literal
 
 import numpy as np
 
-from ._validation import as_1d_float
+from ._validation import as_1d_float, check_count
 from .core import rga
 from .exceptions import InputError
 from .inference import RGAEstimate, rga_ci
@@ -91,6 +91,25 @@ __all__ = [
 ]
 
 RemovalMethod = Literal["mean", "median", "mode", "permute", "retrain"]
+
+#: The removal methods this module implements. ``RemovalMethod`` above is a
+#: type hint, and a type hint is not a runtime check: "retrain", "permute",
+#: "mode" and "median" each had an explicit branch, and *every other string*
+#: fell through to the mean-substitution default. ``method="meam"`` returned
+#: the mean-substitution RGE, and ``method="retrian"`` returned it instead of
+#: demanding the ``refit`` callable that "retrain" requires - a plausible
+#: number from a method nobody asked for, which is the worst failure mode a
+#: validation library has.
+REMOVAL_METHODS = frozenset({"mean", "median", "mode", "permute", "retrain"})
+
+
+def _check_method(method: Any) -> str:
+    if method not in REMOVAL_METHODS:
+        raise InputError(
+            f"unknown removal method {method!r}; expected one of "
+            f"{sorted(REMOVAL_METHODS)!r}."
+        )
+    return method
 
 
 def _is_numeric(values: Any) -> bool:
@@ -137,6 +156,7 @@ def replace_column(
     ``random_state`` twice and you get the same permutation, which is the
     property that keeps :func:`rge_shapley` self-consistent.
     """
+    _check_method(method)
     out = X_test.copy()
     source = X_train if X_train is not None else X_test
     if method == "permute":
@@ -325,6 +345,7 @@ def rge(
         One element when ``group=True``, otherwise one per variable, sorted by
         RGE descending.
     """
+    _check_method(method)
     columns = resolve_columns(variables, X_train, "variables")
     resolve_columns(columns, X_test, "variables")
     score_fn = as_score_function(
@@ -451,6 +472,14 @@ def rge_shapley(
     standard permutation-sampling estimator is used, costing
     ``n_permutations * d`` scorings.
     """
+    _check_method(method)
+    if n_permutations is not None:
+        # The estimator divides by this at the end. Zero raised
+        # ZeroDivisionError from inside the loop's aftermath; a negative value
+        # was worse, because `range(-1)` is empty and every Shapley value came
+        # back as a perfectly presentable -0.0.
+        n_permutations = check_count(n_permutations, "n_permutations")
+    max_exact = check_count(max_exact, "max_exact", minimum=0)
     columns = resolve_columns(variables, X_train, "variables")
     resolve_columns(columns, X_test, "variables")
     score_fn = as_score_function(
@@ -514,7 +543,13 @@ def rge_shapley(
     draws = n_permutations if n_permutations is not None else 200
     rng = np.random.default_rng(random_state)
     for _ in range(draws):
-        order = list(rng.permutation(np.asarray(columns, dtype=object)))
+        # Permute *positions*, not the labels themselves. Building an object
+        # array out of the labels turns a list of equal-length tuples - which
+        # is exactly how pandas spells MultiIndex columns, and which
+        # resolve_columns explicitly supports - into a 2-D array, so shuffling
+        # it yielded rows: unhashable ndarrays where the set operations below
+        # need labels, and a TypeError from deep inside the loop.
+        order = [columns[position] for position in rng.permutation(d)]
         running = frozenset()
         previous = 0.0
         for column in order:

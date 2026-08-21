@@ -83,7 +83,7 @@ from typing import Any, Literal
 
 import numpy as np
 
-from ._validation import as_1d_float
+from ._validation import as_1d_float, check_count, check_finite_scalar
 from .core import rga
 from .exceptions import InputError
 from .inference import RGAEstimate, _normal_quantile, rga_ci
@@ -127,6 +127,12 @@ def perturb(
     and the noise-to-standard-deviation ratio for ``"gaussian"`` (any positive
     value). It is ignored by ``"shuffle"``.
     """
+    if kind not in ("tailswap", "gaussian", "shuffle"):
+        raise InputError(
+            f"unknown perturbation kind {kind!r}; expected 'tailswap', "
+            "'gaussian' or 'shuffle'."
+        )
+    magnitude = check_finite_scalar(magnitude, "magnitude")
     if kind == "tailswap" and not 0.0 <= magnitude <= 0.5:
         raise InputError(
             f"for kind='tailswap', magnitude must lie in [0, 0.5]; got {magnitude!r}."
@@ -353,10 +359,9 @@ def rgr(
         raise InputError(
             f"'yhat' has {baseline.size} entries but X_test has {len(X_test)} rows."
         )
+    n_repeats = check_count(n_repeats, "n_repeats")
     if kind == "tailswap":
         n_repeats = 1
-    if n_repeats < 1:
-        raise InputError("'n_repeats' must be at least 1.")
 
     # One seed per repeat, drawn once and reused for every variable, so the
     # draws are independent across repeats but shared across variables.
@@ -443,7 +448,24 @@ def rgr_curve(
 
     Default grids: ``0.01..0.5`` for ``"tailswap"`` (its domain), and
     ``0.05..1.0`` noise-to-sigma ratios for ``"gaussian"``.
+
+    ``kind="shuffle"`` is rejected here, deliberately. A shuffle ignores
+    ``magnitude`` - there is no dial to sweep - so a curve over it is a curve
+    over a parameter that does not exist. It was accepted, fell back to the
+    gaussian grid, and evaluated the same experiment at six points: with a
+    ``random_state`` set, ``rgr`` re-derives its seeds from it on every call,
+    so all six were bit-for-bit the same number and AURGR was a weighted
+    average of one value dressed up as an area. Use
+    ``rgr(..., kind="shuffle")`` for the single "this input is gone entirely"
+    benchmark it actually is.
     """
+    if kind == "shuffle":
+        raise InputError(
+            "kind='shuffle' has no magnitude to sweep, so it has no robustness "
+            "curve and no AURGR. Call rgr(X_test, model, variables, "
+            "kind='shuffle') for the single total-information-loss benchmark, "
+            "or use kind='gaussian' / 'tailswap' for a curve."
+        )
     if grid is None:
         grid = (
             [0.01, 0.02, 0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50]

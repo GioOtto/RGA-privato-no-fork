@@ -1,0 +1,26 @@
+# Development environment for rgbox.
+#
+#   conda env create -f environment.yml
+#   conda activate rga
+#
+# Deliberately *not* a `conda env export` dump: that pins the exact build
+# strings of one platform's channel and stops working on any other machine.
+# The dependency floors live in pyproject.toml and are the single source of
+# truth; this file only says which interpreter to use and defers the rest to
+# pip, so the two cannot drift.
+#
+# The CI matrix covers Python 3.9 / 3.11 / 3.13 on Linux, macOS and Windows,
+# and a separate job installs the declared lower bounds (numpy 1.22, pandas
+# 1.5, scikit-learn 1.4, scipy 1.8) on Python 3.10. 3.11 here is simply a
+# middle of that range.
+name: rga
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      # `dev` pulls in pandas, scikit-learn, scipy, pytest, pytest-cov and
+      # ruff at the versions pyproject.toml declares.
+      - -e .[dev]

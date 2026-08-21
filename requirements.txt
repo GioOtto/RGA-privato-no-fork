@@ -14,7 +14,7 @@ numpy>=1.22
 
 # --- DataFrame workflows: RGE, RGR, fairness, report, sklearn adapter ---
 pandas>=1.5
-scikit-learn>=1.0
+scikit-learn>=1.4
 
 # --- optional accelerators / extras -------------------------------------
 # scipy is optional everywhere: it supplies Kendall's tau in accuracy_report

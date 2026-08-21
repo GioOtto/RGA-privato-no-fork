@@ -236,9 +236,18 @@ def rga_curves(y: Any, yhat: Any) -> RGACurves:
     # Rectangle rule: the endpoint corrections of the trapezoid rule are shared
     # by all three curves and cancel in the ratio, so this is exact.
     areas = {name: float(values[1:].sum()) for name, values in built.items()}
-    value = (areas["dual_lorenz"] - areas["concordance"]) / (
-        areas["dual_lorenz"] - areas["lorenz"]
-    )
+    # Same denominator as rga(), and it must fail the same way. `sum(y) > 0`
+    # above does not imply dispersion: a constant *positive* target clears it,
+    # and then the Lorenz and dual Lorenz curves are the same diagonal, their
+    # areas cancel exactly, and this division raised a bare ZeroDivisionError
+    # from inside the library instead of the typed error rga() gives on the
+    # same input.
+    # area(dual) - area(Lorenz) is exactly 2/total times rga()'s denominator
+    # (expand both sums: the tie structure cancels because y is constant within
+    # a tie group), so the same guard applies once that factor is undone.
+    spread = areas["dual_lorenz"] - areas["lorenz"]
+    _denominator_guard(spread * total / 2.0, y_arr)
+    value = (areas["dual_lorenz"] - areas["concordance"]) / spread
     return RGACurves(
         fraction=np.arange(n + 1, dtype=np.float64) / n,
         lorenz=built["lorenz"],

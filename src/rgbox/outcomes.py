@@ -38,8 +38,8 @@ What this adds over what already exists
 Fairlearn has computed these since 0.4 and has had bootstrap intervals since
 0.11. Two things here are not in it:
 
-* **the intervals are analytic** - Wilson score intervals per group, and a
-  two-proportion normal interval for each gap - so they cost nothing and are
+* **the intervals are analytic** - Wilson score intervals per group, and
+  Agresti-Caffo intervals for each gap - so they cost nothing and are
   deterministic, which matters for a quarterly report that must be diffable;
 * **the headline p-value is corrected for multiplicity by max-T**, exactly as
   in :func:`rgbox.rga_parity`. ``max - min`` over ``k`` groups selects the
@@ -53,6 +53,29 @@ Fairlearn has computed these since 0.4 and has had bootstrap intervals since
 As in :func:`rgbox.rga_parity`, ``gap_noise_floor`` records what ``max - min``
 would average under exact parity at these group sizes, and
 ``gap_excess_over_noise`` is the observed gap net of it.
+
+Tests under the null, intervals not
+-----------------------------------
+The two use different standard errors, on purpose, and getting this wrong was
+this module's worst defect (fixed in 1.0.1; see :func:`_criterion`).
+
+A **test** asks how surprising the data would be *if the groups were equal*, so
+its variance is the one implied by that hypothesis: the selection rate is
+pooled across every eligible row of the included groups, and each group's null
+error is ``sqrt(p_pooled (1 - p_pooled) / n_g)``. That makes each pairwise
+statistic the standard two-proportion score test, and it makes the max-T draws
+above a simulation of the same joint null the statistics are referred to.
+
+An **interval** asks what values of the gap are consistent with the data, so it
+must *not* assume they are equal. It uses Agresti-Caffo, the two-sample
+analogue of the per-group Wilson intervals.
+
+The distinction is not academic. Plugging observed rates into a test divides by
+zero whenever a group's rate is exactly 0 or 1 - a threshold above every score
+in one segment, a small group nobody was selected from - and the resulting
+``0 / 0`` was read as "no evidence at all". A 0% versus 100% selection-rate gap,
+the largest disparity the data can express, came back with ``p = 1.0`` and a
+zero-width interval.
 """
 
 from __future__ import annotations
@@ -66,6 +89,8 @@ import numpy as np
 from ._validation import (
     as_1d_float,
     as_group_labels,
+    check_count,
+    check_finite_scalar,
     check_level,
     distinct_levels,
 )
@@ -100,6 +125,33 @@ def _wilson_interval(successes: float, n: int, z: float) -> tuple[float, float]:
     centre = (p + z * z / (2 * n)) / denominator
     half = (z / denominator) * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
     return (max(0.0, centre - half), min(1.0, centre + half))
+
+
+def _agresti_caffo(
+    successes_a: int, n_a: int, successes_b: int, n_b: int, z: float
+) -> tuple[float, float]:
+    """Interval for a *difference* of proportions, ``p_a - p_b``.
+
+    The Wald interval is to a difference what it is to a single proportion, and
+    fails in the same place: with one group at 0% and the other at 100% both
+    plug-in variances are zero, so the interval collapses to a single point on
+    the largest disagreement the data can express. That is precisely the case
+    a fairness table exists to flag.
+
+    Agresti-Caffo is the two-sample analogue of the Wilson interval used for
+    the per-group rates above - add one success and one failure to each group,
+    then take the Wald interval of the adjusted proportions. It is centred on
+    the adjusted difference rather than the raw one, which is what keeps it
+    non-degenerate at the boundary, and its coverage at small counts is much
+    closer to nominal than Wald's.
+    """
+    p_a = (successes_a + 1.0) / (n_a + 2.0)
+    p_b = (successes_b + 1.0) / (n_b + 2.0)
+    difference = p_a - p_b
+    half = z * math.sqrt(
+        p_a * (1.0 - p_a) / (n_a + 2.0) + p_b * (1.0 - p_b) / (n_b + 2.0)
+    )
+    return (max(-1.0, difference - half), min(1.0, difference + half))
 
 
 @dataclass(frozen=True)
@@ -263,7 +315,12 @@ def _as_decisions(decisions: Any, threshold: float | None, n: int) -> np.ndarray
     if values.size != n:
         raise InputError(f"'decisions' has {values.size} entries but y_true has {n}.")
     if threshold is not None:
-        return (values >= threshold).astype(np.float64)
+        # A NaN threshold makes `values >= threshold` False on every row, so
+        # the whole sample became "nobody selected", every rate 0, every gap 0,
+        # and the result read as perfect parity - with no error anywhere.
+        return (values >= check_finite_scalar(threshold, "threshold")).astype(
+            np.float64
+        )
     unique = np.unique(values)
     if not np.all(np.isin(unique, (0.0, 1.0))):
         raise InputError(
@@ -293,9 +350,35 @@ def _criterion(
     n_resamples: int,
     want_ratio: bool,
 ) -> CriterionResult:
-    """Per-group selection rates over the rows flagged by ``eligible``."""
+    """Per-group selection rates over the rows flagged by ``eligible``.
+
+    Everything reported here that is a *test* is computed under the null of
+    exact parity, and everything that is an *interval* is not. That split is
+    the fix for the worst defect this module has had.
+
+    The tests used to divide each observed difference by the plug-in standard
+    error of the observed rates. When a group's rate is exactly 0 or exactly 1
+    - a threshold above every score in one segment, a small group nobody was
+    selected from - that plug-in variance is exactly zero. Two such groups gave
+    ``0 / 0``, which the code read as "no evidence" and reported as ``p = 1``,
+    together with a zero-width confidence interval, for a selection-rate gap of
+    100 percentage points. The most extreme disparity representable in the data
+    was the one case guaranteed to be called not significant.
+
+    The variance under H0 is not the observed one. Under ``H0: p_1 = ... = p_k``
+    there is a single common rate, estimated by pooling every eligible row, and
+    each group's null standard error is ``sqrt(p_pooled (1 - p_pooled) / n_g)``
+    - zero only when *every* group agrees, which is exactly when there is
+    genuinely nothing to detect. Pooling makes the pairwise statistic the
+    standard two-proportion score test, and it makes the max-T draws below a
+    simulation of the real joint null instead of a degenerate one: the
+    ``hypot`` of two pooled group errors is precisely the score test's
+    denominator, so the simulated reference distribution and the statistic
+    referred to it are the same quantity.
+    """
     records: list[GroupRate] = []
-    kept: dict[Any, tuple[float, float, int]] = {}  # label -> (rate, se, n)
+    # label -> (rate, observed se, n eligible, n selected)
+    kept: dict[Any, tuple[float, float, int, int]] = {}
 
     for label, mask in distinct_levels(labels):
         size = int(mask.sum())
@@ -337,7 +420,7 @@ def _criterion(
             )
         )
         if included:
-            kept[label] = (rate, standard_error, n_eligible)
+            kept[label] = (rate, standard_error, n_eligible, n_selected)
 
     records.sort(key=lambda record: (record.rate is None, record.rate))
 
@@ -369,9 +452,19 @@ def _criterion(
     worst, best = by_rate[0], by_rate[-1]
     gap = rates[best] - rates[worst]
 
-    standard_errors = np.array([kept[label][1] for label in names], dtype=np.float64)
-    null_draws = _null_group_draws(standard_errors, rng, n_resamples)
-    max_t_draws = _max_t_null(standard_errors, null_draws)
+    # The common rate under H0, pooled over the eligible rows of the included
+    # groups only - the excluded ones do not enter any gap, so they must not
+    # move the null either.
+    pooled_selected = sum(kept[label][3] for label in names)
+    pooled_eligible = sum(kept[label][2] for label in names)
+    pooled_rate = pooled_selected / pooled_eligible
+    pooled_variance = pooled_rate * (1.0 - pooled_rate)
+    null_errors = np.array(
+        [math.sqrt(pooled_variance / kept[label][2]) for label in names],
+        dtype=np.float64,
+    )
+    null_draws = _null_group_draws(null_errors, rng, n_resamples)
+    max_t_draws = _max_t_null(null_errors, null_draws)
     noise_floor = float(np.mean(_null_spread(null_draws)))
 
     def adjusted(statistic: float) -> float:
@@ -380,20 +473,34 @@ def _criterion(
             / (max_t_draws.size + 1)
         )
 
+    index_of = {label: position for position, label in enumerate(names)}
+
     pairwise: list[dict[str, Any]] = []
     for i, first in enumerate(names):
         for second in names[i + 1 :]:
             difference = rates[first] - rates[second]
+            # Observed (unpooled) error: descriptive, and *not* what the test
+            # divides by. Kept because a reader comparing this table against
+            # any other two-proportion output will look for it.
             se = float(np.hypot(kept[first][1], kept[second][1]))
-            statistic = difference / se if se > 0 else 0.0
+            null_se = float(
+                np.hypot(null_errors[index_of[first]], null_errors[index_of[second]])
+            )
+            # null_se is 0 only when the pooled rate is 0 or 1, i.e. when every
+            # included group agrees exactly and every difference is 0 too.
+            statistic = difference / null_se if null_se > 0 else 0.0
+            low, high = _agresti_caffo(
+                kept[first][3], kept[first][2], kept[second][3], kept[second][2], z_crit
+            )
             pairwise.append(
                 {
                     "group_a": first,
                     "group_b": second,
                     "difference": difference,
                     "standard_error": se,
-                    "ci_low": difference - z_crit * se,
-                    "ci_high": difference + z_crit * se,
+                    "null_standard_error": null_se,
+                    "ci_low": low,
+                    "ci_high": high,
                     "p_value": 2.0 * (1.0 - _normal_cdf(abs(statistic))),
                     "p_value_adjusted": adjusted(statistic),
                 }
@@ -404,7 +511,11 @@ def _criterion(
         for record in pairwise
         if {record["group_a"], record["group_b"]} == {best, worst}
     )
-    gap_se = widest["standard_error"]
+    # The gap is best - worst and so is positive; build its interval in that
+    # order rather than reusing the pair record, whose sign follows `names`.
+    gap_ci = _agresti_caffo(
+        kept[best][3], kept[best][2], kept[worst][3], kept[worst][2], z_crit
+    )
 
     ratio = ratio_ci = None
     if want_ratio:
@@ -431,7 +542,7 @@ def _criterion(
         conditioned_on=conditioned_on,
         groups=records,
         gap=gap,
-        gap_ci=(gap - z_crit * gap_se, gap + z_crit * gap_se),
+        gap_ci=gap_ci,
         gap_p_value=widest["p_value_adjusted"],
         gap_p_value_unadjusted=widest["p_value"],
         gap_noise_floor=noise_floor,
@@ -513,6 +624,10 @@ def outcome_parity(
     decision_values = _as_decisions(decisions, threshold, n)
     labels = as_group_labels(groups, "groups", n)
     level = check_level(level)
+    # n_resamples = 0 left the max-T sample empty, and (1 + 0) / (0 + 1) is 1.0
+    # for every gap however extreme - a credible, always-reassuring p-value.
+    n_resamples = check_count(n_resamples, "n_resamples")
+    min_group_size = check_count(min_group_size, "min_group_size")
     z_crit = _normal_quantile(1.0 - (1.0 - level) / 2.0)
     rng = np.random.default_rng(random_state)
 
@@ -575,11 +690,14 @@ def outcome_parity(
 
     tpr_gap = criteria["equal_opportunity"].gap
     fpr_gap = criteria["predictive_equality"].gap
-    equalized = (
-        None
-        if tpr_gap is None and fpr_gap is None
-        else max(gap for gap in (tpr_gap, fpr_gap) if gap is not None)
-    )
+    # Equalised odds is defined as the larger of *both* gaps. With only one of
+    # them computable there is no such quantity, so this reports None rather
+    # than the survivor: the note explaining the substitution lives in `notes`,
+    # and a consumer reading `result.to_dict()["equalized_odds"]` as a number -
+    # a dashboard, a threshold check, a JSON diff between quarters - would
+    # never see it. A missing value is unambiguous in a way a plausible one is
+    # not.
+    equalized = None if tpr_gap is None or fpr_gap is None else max(tpr_gap, fpr_gap)
 
     notes: list[str] = []
     if threshold is None:
@@ -591,9 +709,15 @@ def outcome_parity(
                 f"{min_group_size} eligible rows."
             )
     if tpr_gap is None or fpr_gap is None:
+        available = "TPR" if tpr_gap is not None else "FPR"
+        missing = "FPR" if tpr_gap is not None else "TPR"
         notes.append(
-            "equalised odds needs both the TPR and the FPR gap; it is reported "
-            "from whichever was computable."
+            f"equalised odds is None: it needs both the TPR and the FPR gap, "
+            f"and the {missing} gap was not computable. The {available} gap is "
+            "reported on its own under its own criterion."
+            if tpr_gap is not None or fpr_gap is not None
+            else "equalised odds is None: neither the TPR nor the FPR gap was "
+            "computable."
         )
 
     return OutcomeParityResult(

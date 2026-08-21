@@ -48,9 +48,24 @@ def _looks_like_classifier(model: Any) -> bool:
     return hasattr(model, "predict_proba") and hasattr(model, "classes_")
 
 
+def _class_index(model: Any, pos_label: Any) -> int:
+    """Position of ``pos_label`` in the model's ``classes_``."""
+    classes = getattr(model, "classes_", None)
+    if classes is None:
+        raise ModelAdapterError(
+            "pos_label was given but the model exposes no `classes_` attribute."
+        )
+    matches = np.flatnonzero(np.asarray(classes) == pos_label)
+    if matches.size != 1:
+        raise InputError(
+            f"pos_label={pos_label!r} is not one of the model's classes "
+            f"{list(classes)!r}."
+        )
+    return int(matches[0])
+
+
 def _positive_column(model: Any, proba: np.ndarray, pos_label: Any) -> np.ndarray:
     """Select the column of ``predict_proba`` that the score should follow."""
-    classes = getattr(model, "classes_", None)
     if proba.ndim != 2:
         raise ModelAdapterError(
             f"predict_proba returned an array of shape {proba.shape}; expected "
@@ -76,17 +91,7 @@ def _positive_column(model: Any, proba: np.ndarray, pos_label: Any) -> np.ndarra
             )
         return proba[:, 1]
 
-    if classes is None:
-        raise ModelAdapterError(
-            "pos_label was given but the model exposes no `classes_` attribute."
-        )
-    matches = np.flatnonzero(np.asarray(classes) == pos_label)
-    if matches.size != 1:
-        raise InputError(
-            f"pos_label={pos_label!r} is not one of the model's classes "
-            f"{list(classes)!r}."
-        )
-    return proba[:, int(matches[0])]
+    return proba[:, _class_index(model, pos_label)]
 
 
 def as_score_function(
@@ -135,6 +140,27 @@ def as_score_function(
         return from_proba
 
     if hasattr(model, "decision_function"):
+        # A binary decision_function is a single margin oriented towards
+        # `classes_[1]` by scikit-learn's convention, so asking for
+        # `classes_[0]` means the same margin with the opposite sign. This used
+        # to ignore pos_label entirely on this branch: the argument was
+        # accepted, the orientation was never changed, and RGA came back as
+        # 1 - RGA with no error and no warning - 0.964 reported as 0.036 on the
+        # LinearSVC in the test suite. A pos_label naming a class the model was
+        # never fitted on was accepted here too, while the predict_proba branch
+        # rejected it.
+        margin_sign = sign
+        if pos_label is not None:
+            index = _class_index(model, pos_label)
+            n_classes = len(np.asarray(model.classes_))
+            if n_classes != 2:
+                raise ModelAdapterError(
+                    f"pos_label with decision_function needs a binary model; "
+                    f"this one has {n_classes} classes. Pass an explicit score "
+                    "function, or use rgbox.accuracy.rga_ovr."
+                )
+            if index == 0:
+                margin_sign = -margin_sign
 
         def from_margin(X: Any) -> np.ndarray:
             scores = np.asarray(model.decision_function(X), dtype=np.float64)
@@ -143,7 +169,7 @@ def as_score_function(
                     "decision_function returned one column per class; supply "
                     "pos_label or an explicit score function."
                 )
-            return sign * scores.ravel()
+            return margin_sign * scores.ravel()
 
         return from_margin
 

@@ -6,6 +6,7 @@ messages, NaN policy and dtype handling are identical everywhere.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -17,6 +18,8 @@ __all__ = [
     "as_score_pair",
     "as_weights",
     "check_level",
+    "check_count",
+    "check_finite_scalar",
     "as_group_labels",
     "distinct_levels",
     "is_missing",
@@ -142,7 +145,19 @@ def as_score_pair(
 
 
 def as_weights(weights: Any, n: int) -> np.ndarray | None:
-    """Coerce optional sample weights; ``None`` means uniform."""
+    """Coerce optional sample weights; ``None`` means uniform.
+
+    The weights are **rescaled to mean 1** before being returned. RGA is a
+    ratio whose numerator and denominator both scale as the square of the
+    weight scale, so multiplying every weight by a positive constant cannot
+    change the answer - but the zero-denominator guard in :mod:`rgbox.core`
+    measures that denominator against a tolerance derived from ``y`` alone,
+    which does *not* scale. Without this normalisation ``weights = [1, 1, 1,
+    1]`` was computed happily while ``weights = [1e-8] * 4`` - the same
+    relative weights, and just as legal under the checks below - was rejected
+    as numerically degenerate. Normalising first makes the guard see the same
+    denominator for both, which is the invariance the measure actually has.
+    """
     if weights is None:
         return None
     w = as_1d_float(weights, "weights")
@@ -157,13 +172,62 @@ def as_weights(weights: Any, n: int) -> np.ndarray | None:
         raise InsufficientDataError(
             "at least two observations must carry non-zero weight."
         )
-    return w
+    return w * (w.size / total)
 
 
 def check_level(level: float) -> float:
     if not (0.0 < level < 1.0):
         raise InputError(f"'level' must lie strictly in (0, 1); got {level!r}.")
     return float(level)
+
+
+def check_count(value: Any, name: str, *, minimum: int = 1) -> int:
+    """Coerce a resampling / iteration count and reject the degenerate ones.
+
+    Every counter in this package - ``n_resamples``, ``n_permutations``,
+    ``n_repeats``, ``block_size``, ``n_bins``, ``top`` - feeds a loop, an array
+    allocation or a divisor, and each one had its own failure mode when given 0
+    or a negative number: an infinite loop in ``bootstrap_values``, a
+    ``ZeroDivisionError`` in ``rge_shapley``, a silently empty search in
+    ``worst_cohort``, and - worst of the family - a p-value of exactly 1.0
+    returned with no warning by ``outcome_parity(n_resamples=0)``, because the
+    empty max-T sample makes ``(1 + 0) / (0 + 1)`` the answer for every gap.
+    A wrong count must fail here, loudly, rather than downstream in NumPy or
+    not at all.
+
+    ``minimum=0`` is passed by the callers where "do none of this" is a
+    documented, meaningful request - skipping the permutation p-value of
+    :func:`rgbox.worst_cohort`, for instance.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise InputError(
+            f"{name!r} must be an integer; got {value!r} of type "
+            f"{type(value).__name__}."
+        )
+    count = int(value)
+    if count < minimum:
+        raise InputError(f"{name!r} must be at least {minimum}; got {count}.")
+    return count
+
+
+def check_finite_scalar(value: Any, name: str) -> float:
+    """Coerce a scalar that must be a real, finite number.
+
+    NaN is the dangerous one, and silently: ``values >= float('nan')`` is
+    ``False`` for every row, so a NaN threshold does not raise - it turns the
+    whole sample into "nobody was selected" and reports perfect parity.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise InputError(f"{name!r} must be a number; got {value!r}.") from exc
+    if not math.isfinite(number):
+        raise InputError(
+            f"{name!r} must be finite; got {value!r}. A NaN compares False "
+            "against everything, so it would silently produce an empty "
+            "selection rather than an error."
+        )
+    return number
 
 
 def as_group_labels(values: Any, name: str, expected: int) -> np.ndarray:
@@ -175,14 +239,15 @@ def as_group_labels(values: Any, name: str, expected: int) -> np.ndarray:
     ``float('nan') != float('nan')``, so every missing row becomes its own
     "level" of size zero. Encode missing as an explicit level if it should be
     reported, or filter the rows if it should not.
+
+    Shape is checked with the same policy as :func:`as_1d_float`: ``(n,)``,
+    ``(n, 1)`` and ``(1, n)`` are accepted, anything else is rejected. This
+    used to ``ravel()`` whatever it was handed, so a two-dimensional block
+    passed by mistake - a 2x2 frame alongside four observations, say - became
+    four group labels in row-major order with no complaint, while the numeric
+    arguments of the very same call rejected it. One policy, both arguments.
     """
-    if hasattr(values, "to_numpy"):
-        values = values.to_numpy()
-    arr = np.asarray(values)
-    if arr.ndim > 1:
-        arr = arr.ravel()
-    if arr.ndim != 1:  # pragma: no cover - ravel always yields 1-D
-        raise InputError(f"{name!r} must be one-dimensional.")
+    arr = _ravel_columnish(values, name)
     if arr.size != expected:
         raise InputError(f"{name!r} has {arr.size} entries but y has {expected}.")
 

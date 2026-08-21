@@ -4,7 +4,184 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning restarts at 1.0.0 for the fork; upstream's last release was 0.8.3
 (14 May 2025).
 
-## [Unreleased]
+## [1.0.1]
+
+### Fixed — statistics
+
+- **`outcome_parity` called the most extreme disparity in the data "not
+  significant".** Every test was divided by the *observed* plug-in standard
+  error of the group rates. A rate of exactly 0 or exactly 1 has a plug-in
+  variance of exactly 0, so a group nobody was selected from compared against
+  one where everybody was gave `0 / 0` — read as "no evidence" and reported as
+  `p = 1.0` (adjusted and unadjusted alike), with a zero-width confidence
+  interval `(1.0, 1.0)`, for a selection-rate gap of 100 points. The max-T
+  simulation degenerated with it, because it was fed the same zero errors.
+
+  Tests are now computed under the null they are testing: the common rate is
+  pooled across the eligible rows of the included groups, each group's null
+  error is `sqrt(p_pooled (1 - p_pooled) / n_g)`, and the pairwise statistic is
+  the standard two-proportion score test. The `hypot` of two pooled errors is
+  exactly that test's denominator, so the max-T draws now simulate the same
+  quantity the statistic is referred to. The 0-vs-100 case goes from `p = 1.0`
+  to `p < 1e-40` unadjusted and to the `1 / (n_resamples + 1)` floor adjusted;
+  type I error under exact parity stays at nominal.
+
+  Intervals are *not* pooled — a confidence interval must not assume the null —
+  and move from Wald to **Agresti-Caffo**, the two-sample analogue of the
+  Wilson intervals already used for the per-group rates. The degenerate gap
+  interval becomes `(0.953, 1.0)`. `pairwise` records gain a
+  `null_standard_error` key; `standard_error` keeps its old unpooled meaning.
+- **`rga_test` accepted any `alternative`.** Anything other than `"greater"` or
+  `"less"` fell through to the two-sided branch, so `alternative="grater"` ran
+  a different test and returned a different p-value (0.265 against 0.868 on the
+  suite's own fixture) without complaint. Unknown values now raise.
+- **`rga_test` disagreed with itself on a constant score.** The analytic branch
+  divided a zero deviation by a zero null SD, called the result 0, and reported
+  `p = 0.5` for a one-sided test — halfway to significance for a score carrying
+  no information at all. The Monte-Carlo branch raised `ZeroDivisionError`
+  computing its own statistic on the same input. The permutation null of a
+  constant score is a point mass, so the exact p-value is 1 for every
+  alternative; both branches now return that.
+- **RGA was not invariant to the scale of `weights`.** Multiplying every weight
+  by a positive constant cannot change a ratio whose numerator and denominator
+  both scale as its square, but the zero-denominator guard compares against a
+  tolerance derived from `y` alone, which does not scale. `weights = [1] * 4`
+  was computed; `weights = [1e-8] * 4` — the same relative weights, equally
+  legal under every check — was rejected as numerically degenerate. Weights are
+  now normalised to mean 1 on the way in; RGA is now identical across 16 orders
+  of magnitude of weight scale.
+- **`rga_curves` raised `ZeroDivisionError` on a constant positive target.**
+  `sum(y) > 0` does not imply dispersion. `rga()` catches this with a typed
+  `UndefinedMetricError`; `rga_curves` now applies the same guard to the same
+  denominator instead of dividing by a hard zero.
+- **`bootstrap_values(block_size=0)` never returned.** `take = min(block_size,
+  remaining)` is 0 on every iteration, so the loop counter never advanced — a
+  mistyped tuning parameter hung the worker rather than raising.
+
+### Fixed — inverted and silently wrong results
+
+- **`pos_label` was ignored by the `decision_function` adapter.** scikit-learn
+  orients a binary margin towards `classes_[1]`; asking for `classes_[0]` means
+  the same margin negated. The argument was accepted and the orientation never
+  changed, so RGA came back as `1 - RGA` with no error — measured at 0.964
+  reported as 0.036 on a `LinearSVC`. A `pos_label` naming a class the model was
+  never fitted on was accepted here too, while the `predict_proba` branch
+  rejected it.
+- **`make_rga_scorer(pos_label=...)` dropped the argument entirely.** It reached
+  neither `make_scorer` nor the metric, so `pos_label=0` and `pos_label=1`
+  produced scorers that behaved identically. Honouring it needs both the score
+  column *and* `y_true` re-expressed relative to the chosen class, so passing it
+  now returns a callable scorer built on `predict_scores`.
+- **`rge(method=...)` accepted anything.** `RemovalMethod` is a type hint, and
+  four methods had explicit branches while *every other string* fell through to
+  mean substitution: `method="meam"` returned the mean-substitution RGE, and
+  `method="retrian"` returned it instead of demanding the `refit` callable that
+  `"retrain"` requires. Now validated against `REMOVAL_METHODS`.
+- **`rgr_curve(kind="shuffle")` built a curve over a parameter that does not
+  exist.** A shuffle ignores `magnitude`; the call fell back to the gaussian
+  grid and, because `rgr` re-derives its seeds from `random_state` on every
+  call, evaluated the identical experiment at all six points — six bit-for-bit
+  equal values, and an AURGR that averaged one number. Now rejected, with a
+  pointer to `rgr(..., kind="shuffle")` for the single benchmark it is.
+- **`outcome_parity(threshold=float("nan"))` reported perfect parity.**
+  `values >= nan` is False on every row, so the sample became "nobody
+  selected", every rate 0 and every gap 0, with no error. Thresholds must now
+  be finite.
+- **`equalized_odds` is `None` when only one of its two gaps is computable**,
+  instead of the survivor plus a note. It is defined as the larger of the TPR
+  and FPR gaps; with one missing there is no such quantity, and a consumer
+  reading the JSON number would never see the note.
+
+### Fixed — validation and error typing
+
+- `check_count` and `check_finite_scalar` centralise what each counter used to
+  get wrong on its own. Newly rejected, having previously hung, crashed inside
+  NumPy, or silently returned something plausible:
+  `outcome_parity(n_resamples=0)` (returned `p = 1.0` for *every* gap, since
+  `(1 + 0) / (0 + 1)` is the answer when the max-T sample is empty),
+  `rge_shapley(n_permutations=0)` (`ZeroDivisionError`) and `-1` (every Shapley
+  value came back `-0.0`), `worst_cohort(top=-1)` (returned every cohort
+  *except the best one*), `worst_cohort(n_permutations=-1)`
+  (`ZeroDivisionError` on `-1 + 1`), `worst_cohort(n_bins<2)` (numeric features
+  produced no bins at all, and the search reported finding nothing having
+  looked at nothing), `contamination_curve(n_repeats=0)` (NaN in every
+  contaminated row) and fractions outside `[0, 1]` (raw NumPy `ValueError`),
+  and `rga_test(n_permutations=0)` (NaN statistic).
+- **`rge_shapley` crashed on MultiIndex columns in the sampled path.** Building
+  an object array from a list of equal-length tuples — which is how pandas
+  spells MultiIndex columns, and which `resolve_columns` explicitly supports —
+  produces a 2-D array, so permuting it yielded unhashable ndarrays where the
+  coalition sets need labels. Positions are permuted now, not labels.
+- **`as_group_labels` silently `ravel()`ed multidimensional input.** A 2×2 block
+  passed by mistake alongside four observations became four group labels in
+  row-major order, while the numeric arguments of the same call rejected it.
+  Both now use one policy: `(n,)`, `(n, 1)` or `(1, n)`.
+- `perturb` validates `kind` and requires a finite `magnitude`.
+
+### Fixed — the report artefact
+
+- **`RGBoxReport.to_html` performed no escaping.** Model names, column labels,
+  group levels and warning text come from the caller's data and were
+  interpolated raw into `<h1>`, `<td>`, `<p>` and `<blockquote>`, so a level
+  spelled `<img src=x onerror=...>` became markup as soon as the report was
+  opened — stored HTML injection in a document produced to be circulated.
+- **The report printed "95% CI" whatever `level` was.** The level was passed
+  faithfully to the estimators and recorded correctly in `metadata` and the
+  JSON; only the captions were hard-coded, so a 90% report was labelled as a
+  95% one.
+- **One failing section destroyed the whole report.** The docstring's promise
+  that what cannot be computed is skipped and noted held only for
+  `proxy_leakage`. A single string column among `variables` reached `perturb`'s
+  numeric check and took the accuracy, explainability and fairness blocks down
+  with it. Every section now has its own boundary. Only `RGBoxError` is caught:
+  an arbitrary exception from a user-supplied model is a bug, not an
+  inapplicable section.
+
+### Fixed — packaging
+
+- **`import safeaipackage` failed on a valid minimal install.** The
+  distribution declares numpy as its only hard requirement, but the
+  compatibility layer eagerly imported four submodules that import pandas at
+  module scope — so `import rgbox` worked and the other top-level package in
+  the same wheel did not. Those submodules are now reached lazily, with an
+  error naming the missing extra. `safeaipackage.core` is numpy-only and stays
+  eager.
+- **`py.typed` was missing** despite the `Typing :: Typed` classifier. Added for
+  both packages, and a test now asserts it ships in the built wheel.
+- **The version is 1.0.1.** Six source files documented behaviour changes "in
+  1.0.1" while `pyproject.toml` and `rgbox.__version__` both said 1.0.0 and the
+  changelog kept them under `[Unreleased]`. A test now ties the three together.
+- **The declared dependency floors were never tested, and two of them were
+  wrong.** CI installed whatever pip resolved on the day, which is always the
+  newest, so `>=` in `pyproject.toml` was an assertion nobody checked. A
+  `minimum-dependencies` job now installs exactly the declared lower bounds,
+  and found on its first run:
+  - `accuracy_report` raised `AttributeError` on the declared `scipy>=1.8`.
+    `kendalltau(...).statistic` is SciPy 1.9 and later; before that the field
+    is `.correlation`, which is still kept as an alias. Now reads whichever
+    exists, so the 1.8 floor is true.
+  - **every `make_rga_scorer()` score was NaN below scikit-learn 1.4.** The
+    `response_method` keyword arrived in 1.4; older `make_scorer` forwards
+    unrecognised keywords to the *metric* rather than rejecting them, so the
+    scorer was constructed successfully and then died at scoring time with
+    `rga() got an unexpected keyword argument 'response_method'` — which
+    `cross_val_score` converts into NaN. The `except TypeError` fallback that
+    was meant to cover this could never fire, because nothing raised at
+    construction. Capability is now detected from `make_scorer`'s signature.
+  - the scikit-learn floor moves to **`>=1.4`**. Below it, lbfgs used a looser
+    stopping rule and a logistic fit on unscaled data terminates at a different
+    point (35 iterations against 2611 on the suite's own fixture), so the
+    explainability results are not reproducible there. Verified green on
+    Python 3.10 with numpy 1.22.4, pandas 1.5.3, scikit-learn 1.4.2 and
+    scipy 1.8.1.
+- **CI actions are pinned to commit SHAs** rather than to `@v5`-style major
+  tags, which the action owner can repoint at any time, and `ruff`, `build` and
+  `twine` are installed at pinned versions. The workflow declares
+  `permissions: contents: read`.
+- The `minimal-install` job now also asserts `import safeaipackage` works — it
+  only ever tested `import rgbox`, which is why the pandas-at-module-scope
+  regression above went unnoticed — and the `build` job asserts `py.typed`
+  is present in the built wheel, not merely in the source tree.
 
 ### Added
 

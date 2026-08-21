@@ -66,7 +66,7 @@ from ._ranks import (
     suffix_sums_strictly_greater_from,
     tie_group_sums_from,
 )
-from ._validation import as_score_pair, check_level
+from ._validation import as_score_pair, check_count, check_level
 from .core import rga
 from .exceptions import InputError, InsufficientDataError, UndefinedMetricError
 
@@ -279,6 +279,13 @@ def bootstrap_values(
     """
     rng = np.random.default_rng(random_state)
     n = y.size
+    n_resamples = check_count(n_resamples, "n_resamples")
+    if block_size is not None:
+        # `take = min(block_size, remaining)` is 0 for every iteration when
+        # block_size is 0, so `done` never advances and the loop below never
+        # terminates - a mistyped tuning parameter used to hang the worker
+        # rather than raise.
+        block_size = check_count(block_size, "block_size")
     if block_size is None:
         # Each replicate block materialises a handful of (block, n) float64
         # arrays; cap them at roughly 32 MB apiece so large samples do not
@@ -697,9 +704,28 @@ def rga_test(
     ``n_permutations`` to get the Monte-Carlo version instead, which is worth
     doing for small ``n`` where the normal approximation to the permutation
     distribution is loose.
+
+    Degenerate scores
+    -----------------
+    A constant score has no permutation distribution at all: every relabelling
+    gives the same RGA of exactly 0.5, so the null is a point mass on the
+    observed value and the exact permutation p-value is 1 for *every*
+    alternative. Both branches return that. The analytic branch used to divide
+    the zero deviation by a zero standard deviation, call the result 0, and
+    report ``p = 0.5`` for a one-sided test - halfway to significance for a
+    score carrying no information whatsoever - while the Monte-Carlo branch
+    raised ``ZeroDivisionError`` computing its own statistic on the same input.
     """
     y_arr, yhat_arr = as_score_pair(y, yhat, min_size=3)
     n = y_arr.size
+    if alternative not in ("greater", "less", "two-sided"):
+        raise InputError(
+            f"unknown alternative {alternative!r}; expected 'greater', 'less' "
+            "or 'two-sided'. It was previously accepted and silently treated "
+            "as 'two-sided', so a typo returned a different test."
+        )
+    if n_permutations is not None:
+        n_permutations = check_count(n_permutations, "n_permutations")
     centred = y_arr - y_arr.mean()
     denominator = float(centred @ average_ranks(y_arr))
     if abs(denominator) < 1e-300:
@@ -711,13 +737,18 @@ def rga_test(
         rank_ss = float(np.sum((ranks - ranks.mean()) ** 2))
         null_sd_numerator = math.sqrt(float(np.sum(centred**2)) * rank_ss / (n - 1))
         null_sd = null_sd_numerator / (2.0 * abs(denominator))
-        statistic = (point - 0.5) / null_sd if null_sd > 0 else 0.0
-        if alternative == "greater":
-            p_value = 1.0 - _normal_cdf(statistic)
-        elif alternative == "less":
-            p_value = _normal_cdf(statistic)
+        if null_sd > 0:
+            statistic = (point - 0.5) / null_sd
+            if alternative == "greater":
+                p_value = 1.0 - _normal_cdf(statistic)
+            elif alternative == "less":
+                p_value = _normal_cdf(statistic)
+            else:
+                p_value = 2.0 * (1.0 - _normal_cdf(abs(statistic)))
         else:
-            p_value = 2.0 * (1.0 - _normal_cdf(abs(statistic)))
+            # Point-mass null: nothing is more extreme than the observation,
+            # so the exact permutation p-value is 1 whatever the alternative.
+            statistic, p_value = 0.0, 1.0
         return {
             "rga": point,
             "null_value": 0.5,
@@ -741,11 +772,12 @@ def rga_test(
         p_value = (1 + np.sum(np.abs(draws - 0.5) >= abs(point - 0.5))) / (
             n_permutations + 1
         )
+    null_sd = float(np.std(draws, ddof=1)) if n_permutations > 1 else 0.0
     return {
         "rga": point,
         "null_value": 0.5,
-        "null_se": float(np.std(draws, ddof=1)),
-        "statistic": (point - 0.5) / float(np.std(draws, ddof=1)),
+        "null_se": null_sd,
+        "statistic": (point - 0.5) / null_sd if null_sd > 0 else 0.0,
         "p_value": float(p_value),
         "alternative": alternative,
         "method": f"permutation (Monte Carlo, {n_permutations} draws)",
