@@ -34,7 +34,7 @@ This code was written by an AI system. See the README before adopting it.
 
 from __future__ import annotations
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 __upstream__ = "safeaipackage 0.8.3 (GolnooshBabaei/safeaipackage)"
 
 from .accuracy import (

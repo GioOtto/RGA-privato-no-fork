@@ -272,5 +272,13 @@ def resolve_columns(
         )
     duplicates = {c for c in columns if columns.count(c) > 1}
     if duplicates:
-        raise InputError(f"{argument}: duplicated column(s) {sorted(duplicates)!r}.")
+        # sorted(key=repr), for the same reason as the set branch above: pandas
+        # allows a frame to mix label types, so `["x", 1, "x", 1]` is a legal
+        # duplicate list, and plain `sorted` on {"x", 1} raises TypeError
+        # ("'<' not supported between instances of 'str' and 'int'") from
+        # inside the error path - replacing this InputError with a TypeError
+        # that names neither the argument nor the duplicates.
+        raise InputError(
+            f"{argument}: duplicated column(s) {sorted(duplicates, key=repr)!r}."
+        )
     return columns

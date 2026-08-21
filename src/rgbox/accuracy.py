@@ -227,25 +227,54 @@ def rga_ovr(
     hand back - was rejected with "RGA is defined on ordered values", a
     restriction that applies to the target of ``rga`` and not to a class label
     here. Only the indicator is converted now.
+
+    Dropping ``as_1d_float`` dropped its *missing-value* check with it, which
+    was a hole for one release: with ``y = ["a", "b", None, "c"]`` the ``None``
+    row is simply 0 in every indicator, so it counts as a negative for every
+    class at once, no exception is raised, and a perfectly presentable RGA
+    comes back for a sample in which one row belongs to no class. ``y`` is now
+    validated by :func:`rgbox._validation.as_group_labels` - the same policy
+    the fairness and segment tables already use, and for the same reason - and
+    ``classes`` is checked against the levels actually observed rather than
+    only for length.
     """
-    y_arr = np.asarray(y)
-    if y_arr.ndim != 1:
-        raise InputError(f"'y' must be one-dimensional; got shape {y_arr.shape}.")
     proba_arr = np.asarray(proba, dtype=np.float64)
     if proba_arr.ndim != 2:
         raise InputError(
             f"'proba' must be (n_samples, n_classes); got shape {proba_arr.shape}."
         )
-    if proba_arr.shape[0] != y_arr.size:
-        raise InputError(
-            f"'proba' has {proba_arr.shape[0]} rows but y has {y_arr.size}."
-        )
+    y_arr = as_group_labels(y, "y", proba_arr.shape[0])
+    observed = list(dict.fromkeys(y_arr.tolist()))
     if classes is None:
-        classes = np.unique(y_arr).tolist()
+        try:
+            # np.unique orders numerically, which is the column order a
+            # scikit-learn `classes_` uses; sorting by repr would put 10.0
+            # before 2.0 and silently transpose two columns of `proba`.
+            classes = np.unique(y_arr).tolist()
+        except TypeError:  # heterogeneous labels have no natural order
+            classes = sorted(observed, key=repr)
+    else:
+        classes = list(classes)
     if len(classes) != proba_arr.shape[1]:
         raise InputError(
             f"'classes' has {len(classes)} entries but 'proba' has "
             f"{proba_arr.shape[1]} columns."
+        )
+    duplicates = [c for c in dict.fromkeys(classes) if classes.count(c) > 1]
+    if duplicates:
+        raise InputError(
+            f"'classes' repeats {duplicates!r}. Each entry names the class of "
+            "one column of 'proba', so a repeat means two columns claim the "
+            "same class and the mapping is ambiguous."
+        )
+    unlisted = [level for level in observed if level not in classes]
+    if unlisted:
+        raise InputError(
+            f"'y' contains {len(unlisted)} class(es) not named in 'classes': "
+            f"{sorted(unlisted, key=repr)!r}. Their rows would count as a "
+            "negative for every listed class at once, which silently changes "
+            "each one-vs-rest problem. List every observed class, in the "
+            "column order of 'proba'."
         )
 
     per_class = []

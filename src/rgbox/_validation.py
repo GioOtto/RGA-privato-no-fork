@@ -261,6 +261,24 @@ def as_group_labels(values: Any, name: str, expected: int) -> np.ndarray:
             "fewer rows than the sample. Either filter them out yourself, or "
             "map them to an explicit level such as 'missing'."
         )
+    if arr.dtype == object:
+        # Every consumer groups by label, and grouping needs hashable keys:
+        # `distinct_levels` builds a dict of them. An object column holding
+        # lists, dicts or sets is 1-D and carries no missing values, so it got
+        # all the way through this function and then died on
+        # `TypeError: unhashable type: 'list'` from inside dict.fromkeys -
+        # untyped, and naming an internal helper rather than the argument the
+        # caller passed. Only object columns can hold such a thing, and the
+        # check is the same single dict build `distinct_levels` does anyway.
+        try:
+            dict.fromkeys(arr.tolist())
+        except TypeError as exc:
+            raise InputError(
+                f"{name!r} contains an unhashable label ({exc}). Group labels "
+                "are compared and counted by value, so each one must be "
+                "hashable - a list, dict or set cannot name a level. Convert "
+                "them to strings or another scalar first."
+            ) from None
     return arr
 
 

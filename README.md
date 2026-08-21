@@ -254,11 +254,19 @@ literature's `N(0, (0.5σ)²)`), `"shuffle"`.
 
 A stochastic perturbation has two sources of uncertainty — the sampling noise of
 RGA and the spread across draws — and reporting only the first understates the
-interval. With `n_repeats > 1` and `ci=True` the per-draw intervals are pooled
-by **Rubin's rules** (`T = W + (1 + 1/m)·B`), so the interval and the point
-estimate describe the same quantity. Seeds are drawn once per repeat and shared
-across variables — common random numbers, so two variables are compared under
-the same shocks rather than under independent ones.
+interval. With `n_repeats > 1` and `ci=True` the interval is for the *mean* of
+the `m` draws, which is what the point estimate is: the per-draw influence
+values (or delete-one values, or bootstrap replicates under shared weights) are
+averaged element-wise before their spread is taken, and `B/m` is added for
+having drawn only `m` perturbations. So the interval narrows as `m` grows.
+Seeds are drawn once per repeat and shared across variables — common random
+numbers, so two variables are compared under the same shocks rather than under
+independent ones.
+
+> These multi-draw intervals are **conservative by an uncharacterised factor**
+> and their coverage has not been validated by simulation, unlike the RGA
+> intervals. Read them as an upper bound. The default `n_repeats=1` interval is
+> an ordinary RGA interval and is unaffected.
 
 ### Fairness
 

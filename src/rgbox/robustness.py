@@ -83,10 +83,21 @@ from typing import Any, Literal
 
 import numpy as np
 
-from ._validation import as_1d_float, check_count, check_finite_scalar
+from ._validation import (
+    as_1d_float,
+    check_count,
+    check_finite_scalar,
+    check_level,
+)
 from .core import rga
-from .exceptions import InputError
-from .inference import RGAEstimate, _normal_quantile, rga_ci
+from .exceptions import InputError, UndefinedMetricError
+from .inference import (
+    RGAEstimate,
+    _bootstrap_values,
+    _influence_values,
+    _jackknife_values,
+    _normal_quantile,
+)
 from .predictors import as_score_function, resolve_columns
 
 __all__ = [
@@ -302,46 +313,140 @@ def _perturbed_scores(
     return np.asarray(score_fn(perturbed), dtype=np.float64).ravel()
 
 
+def _draw_values(
+    baseline: np.ndarray,
+    scores: np.ndarray,
+    ci_method: str,
+    n_resamples: int,
+    ci_seed: int,
+) -> np.ndarray:
+    """The linearised values of one draw's RGA: whatever the SE is a spread of.
+
+    Jackknife delete-one values, influence values, or bootstrap replicates.
+    :func:`_pool_across_draws` averages these *across draws* before taking a
+    spread, which is what makes the result an interval for the mean.
+
+    The bootstrap branch is handed one fixed ``ci_seed`` for every draw on
+    purpose. Bootstrap weights depend only on ``n``, ``n_resamples`` and the
+    generator, never on the scores, so a shared seed means every draw is
+    reweighted by the *same* multinomial counts and replicate ``b`` of the
+    average is the average of replicate ``b`` - the paired-resampling trick
+    :func:`rgbox.bootstrap_values` already uses for champion/challenger. Left
+    to advance a live ``Generator`` per draw, as passing ``random_state``
+    straight through did, the weights differ per draw and averaging replicates
+    across them is not a bootstrap distribution of anything.
+    """
+    if ci_method == "jackknife":
+        values = _jackknife_values(baseline, scores)
+        if not np.all(np.isfinite(values)):
+            raise UndefinedMetricError(
+                "some delete-one samples make RGA undefined for a perturbed "
+                "draw (the baseline becomes constant once one observation is "
+                "removed). Use ci_method='influence'."
+            )
+        return values
+    if ci_method == "influence":
+        return _influence_values(baseline, scores)
+    if ci_method == "bootstrap":
+        return np.asarray(
+            _bootstrap_values(
+                baseline,
+                scores,
+                n_resamples=n_resamples,
+                random_state=ci_seed,
+            ),
+            dtype=np.float64,
+        )
+    raise InputError(
+        f"unknown ci_method {ci_method!r}; expected 'jackknife', 'influence' "
+        "or 'bootstrap'."
+    )
+
+
 def _pool_across_draws(
-    per_draw: list[RGAEstimate],
+    per_draw_values: list[np.ndarray],
     draws: list[float],
     level: float,
     ci_method: str,
+    n: int,
 ) -> RGAEstimate:
-    """Combine per-draw RGA intervals into the interval for their mean.
+    """Interval for the *mean* of ``m`` perturbation draws.
 
-    The estimand
-    ------------
-    ``rgr`` reports ``mean(draws)``, whose target is the *expected* RGR over
-    the perturbation distribution, ``E_P[RGA(yhat, yhat_P)]``, on this
-    evaluation sample. The interval must be for that quantity, and by the law
-    of total variance
+    The estimand and its two error terms
+    ------------------------------------
+    ``rgr`` reports ``theta_bar = mean_j RGA(yhat, yhat_Pj)``. Its target is
+    the perturbation-expected RGR, and it carries two independent errors: the
+    evaluation sample is finite, and only ``m`` perturbations were drawn. By
+    the law of total variance,
 
-    ``Var(mean) = Var_sample(E_P[RGR]) + Var_P(RGR) / m``,
+    ``Var(theta_bar) = Var_sample(theta_bar | P_1..P_m) + Var_P(RGR) / m``.
 
-    estimated by ``W + B / m`` with ``W`` the mean of the per-draw sampling
-    variances and ``B`` the variance across draws. The Monte-Carlo term falls
-    away as ``m`` grows, which is the defining property of a quantity the
-    analyst can compute to any desired precision by drawing more perturbations.
+    The second term is ``B / m`` with ``B`` the spread across draws. The first
+    is obtained by **linearising the statistic that is actually reported**: the
+    influence function of an average is the average of the influence functions,
+    and likewise for jackknife delete-one values and for bootstrap replicates
+    under shared weights. So the per-draw value vectors are averaged
+    element-wise *first*, and the spread is taken of that average.
 
-    Why not Rubin's rules
-    ---------------------
-    This used ``W + (1 + 1/m) B``, the multiple-imputation pooling rule, which
-    is the variance of a different estimand. Rubin's extra ``B`` is the
-    *irreducible* uncertainty left by data that were never observed: no number
-    of imputations recovers it, so the total does not converge to ``W``. A
-    perturbation draw is not missing data. It is a device this module chooses
-    and can repeat at will, so nothing about it is irreducible, and carrying a
-    full ``B`` forever overstated the width of every ``n_repeats > 1``
-    interval - conservatively, but for a quantity that is not the one printed
-    beside it.
+    Why the mean of the per-draw variances was wrong
+    ------------------------------------------------
+    This computed ``W = mean_j SE_j**2`` for the first term. ``SE_j`` is the
+    sampling variance of a *single* draw, and by the ANOVA decomposition
+    ``g(S, P) = mu + a(S) + b(P) + c(S, P)`` it equals ``Var(a) +
+    E_P Var_S(c)`` - the sample effect **plus the whole sample-by-perturbation
+    interaction**. Averaging over draws does not remove the interaction from
+    the estimate, though it does remove it from the estimand, so ``W`` does not
+    fall as ``m`` grows. Measured on a Gaussian design at ``n = 300`` with
+    1500-4000 replications per point, against the empirical variance of the
+    reported estimate:
 
-    ``m == 1`` gives ``B = 0`` under either rule, so the default path is
-    unchanged and only ``n_repeats > 1`` moves.
+    ====  ==========  ==========  ==============
+    m     true Var    ``W``       ``var(IF_bar)/n``
+    ====  ==========  ==========  ==============
+    1     1.08e-04    1.39e-04    1.39e-04
+    4     2.47e-05    1.40e-04    6.44e-05
+    16    6.72e-06    1.40e-04    4.55e-05
+    64    2.17e-06    1.41e-04    4.08e-05
+    ====  ==========  ==========  ==============
+
+    The true variance falls ~50x from ``m = 1`` to ``m = 64``; ``W`` is flat to
+    three digits. The two agree exactly at ``m = 1``, as they must, so the
+    default path does not move.
+
+    What is still not settled
+    -------------------------
+    The averaged linearisation is the right one for ``theta_bar`` and it does
+    shrink with ``m``, but the table above shows it plateauing around 4e-5
+    where the empirical sampling floor is nearer 1e-6. **These intervals are
+    conservative, by a factor that has not been characterised**, and their
+    coverage has not been validated by simulation the way the RGA intervals in
+    :mod:`rgbox.inference` have. Read a multi-draw RGR interval as an upper
+    bound on the uncertainty, and see ``docs/THEORY.md``'s open questions. The
+    single-draw interval (``n_repeats=1``, the default) is an ordinary RGA
+    interval and is not affected by any of this.
     """
-    m = len(per_draw)
+    m = len(per_draw_values)
     point = float(np.mean(draws))
-    within = float(np.mean([e.standard_error**2 for e in per_draw]))
+    stacked = np.vstack(per_draw_values)
+    if ci_method == "bootstrap":
+        # A replicate is unusable for the average if it degenerated in any draw.
+        usable = np.all(np.isfinite(stacked), axis=0)
+        stacked = stacked[:, usable]
+        if stacked.shape[1] < 2:
+            raise UndefinedMetricError(
+                "too few bootstrap replicates were defined across every "
+                "perturbation draw to form an interval."
+            )
+    averaged = stacked.mean(axis=0)
+
+    if ci_method == "jackknife":
+        centred = averaged - averaged.mean()
+        within = (n - 1) / n * float(np.sum(centred**2))
+    elif ci_method == "influence":
+        within = float(np.var(averaged, ddof=1)) / n
+    else:
+        within = float(np.var(averaged, ddof=1))
+
     between = float(np.var(draws, ddof=1)) if m > 1 else 0.0
     standard_error = math.sqrt(within + between / m)
     z_crit = _normal_quantile(1.0 - (1.0 - level) / 2.0)
@@ -353,8 +458,8 @@ def _pool_across_draws(
         level=level,
         method=(ci_method if m == 1 else f"{ci_method} + {m} draws (total variance)"),
         interval="normal",
-        n=per_draw[0].n,
-        n_resamples=per_draw[0].n_resamples,
+        n=n,
+        n_resamples=(int(stacked.shape[1]) if ci_method == "bootstrap" else None),
     )
 
 
@@ -421,15 +526,19 @@ def rgr(
         n_repeats = 1
 
     # One seed per repeat, drawn once and reused for every variable, so the
-    # draws are independent across repeats but shared across variables.
+    # draws are independent across repeats but shared across variables. One
+    # further seed drives the CI resampling and is *shared across draws* - see
+    # _draw_values for why the bootstrap needs identical weights per draw.
     master = np.random.default_rng(random_state)
     seeds = master.integers(0, 2**63 - 1, size=n_repeats)
+    ci_seed = int(master.integers(0, 2**63 - 1))
+    level = check_level(level)
 
     groups: list[list[Any]] = [columns] if group else [[c] for c in columns]
     results: list[RGRResult] = []
     for chunk in groups:
         draws: list[float] = []
-        per_draw: list[RGAEstimate] = []
+        per_draw_values: list[np.ndarray] = []
         for repeat in range(n_repeats):
             scores = _perturbed_scores(
                 score_fn,
@@ -441,19 +550,16 @@ def rgr(
             )
             draws.append(rga(baseline, scores))
             if ci:
-                per_draw.append(
-                    rga_ci(
-                        baseline,
-                        scores,
-                        method=ci_method,
-                        level=level,
-                        random_state=random_state,
-                        n_resamples=n_resamples,
-                    )
+                per_draw_values.append(
+                    _draw_values(baseline, scores, ci_method, n_resamples, ci_seed)
                 )
         value = float(np.mean(draws))
         spread = float(np.std(draws, ddof=1)) if n_repeats > 1 else None
-        estimate = _pool_across_draws(per_draw, draws, level, ci_method) if ci else None
+        estimate = (
+            _pool_across_draws(per_draw_values, draws, level, ci_method, baseline.size)
+            if ci
+            else None
+        )
         results.append(
             RGRResult(
                 variables=tuple(chunk),

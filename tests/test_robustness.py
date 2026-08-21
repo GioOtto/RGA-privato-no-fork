@@ -206,41 +206,19 @@ def test_pooled_interval_is_centred_on_the_reported_point(fitted_logit):
     assert "total variance" in result.estimate.method
 
 
-def test_pooled_variance_is_within_plus_between_over_m(fitted_logit):
-    """The estimand is the *mean* over draws, so the MC term carries a 1/m.
+@pytest.mark.parametrize("ci_method", ["jackknife", "influence", "bootstrap"])
+def test_the_pooled_interval_shrinks_as_more_draws_are_averaged(
+    fitted_logit, ci_method
+):
+    """Averaging m draws must reduce the uncertainty of their average.
 
-    Pooling by Rubin's rules - ``W + (1 + 1/m) B`` - was the multiple-imputation
-    rule, whose extra ``B`` is the irreducible uncertainty of data that were
-    never observed. A perturbation draw is a device the caller can repeat at
-    will, so its contribution must vanish as ``m`` grows.
+    This is the property `W = mean(SE_j**2)` violated. `SE_j` is the sampling
+    variance of a *single* draw and carries the whole sample-by-perturbation
+    interaction, so averaging the `SE_j` removes the interaction from the
+    estimand but not from the estimate. Measured against the empirical variance
+    of the reported figure on a Gaussian design at n=300, the true variance
+    fell ~50x from m=1 to m=64 while `W` was flat to three digits.
     """
-    import numpy as np
-
-    from rgbox.inference import RGAEstimate
-    from rgbox.robustness import _pool_across_draws
-
-    draws = [0.60, 0.64, 0.70, 0.66]
-    per_draw = [
-        RGAEstimate(
-            estimate=value,
-            standard_error=0.02,
-            ci_low=value - 0.04,
-            ci_high=value + 0.04,
-            level=0.95,
-            method="jackknife",
-            interval="normal",
-            n=300,
-        )
-        for value in draws
-    ]
-    pooled = _pool_across_draws(per_draw, draws, 0.95, "jackknife")
-    m = len(draws)
-    expected = np.sqrt(0.02**2 + np.var(draws, ddof=1) / m)
-    assert pooled.standard_error == pytest.approx(expected)
-
-
-def test_pooled_interval_is_wider_than_a_single_draw(fitted_logit):
-    """The between-draw variance still enters; ignoring it understates."""
     context = fitted_logit
     kwargs = {
         "yhat": context["yhat"],
@@ -248,17 +226,52 @@ def test_pooled_interval_is_wider_than_a_single_draw(fitted_logit):
         "magnitude": 0.6,
         "random_state": 5,
         "ci": True,
+        "ci_method": ci_method,
+        "n_resamples": 300,
     }
-    one = rgr(context["X_test"], context["model"], ["income"], n_repeats=1, **kwargs)[
-        0
-    ].estimate
-    many = rgr(context["X_test"], context["model"], ["income"], n_repeats=8, **kwargs)[
-        0
-    ].estimate
-    assert many.standard_error > one.standard_error
-    # m == 1 must reduce exactly to the unpooled interval, so the default path
-    # is untouched by the pooling.
-    assert "draws" not in one.method
+    errors = [
+        rgr(context["X_test"], context["model"], ["income"], n_repeats=m, **kwargs)[
+            0
+        ].estimate.standard_error
+        for m in (1, 4, 16)
+    ]
+    assert errors[0] > errors[1] > errors[2], errors
+
+
+def test_a_single_draw_still_gives_the_plain_rga_interval(fitted_logit):
+    """m == 1 must reduce exactly to the unpooled interval it always was."""
+    from rgbox import rga_ci
+
+    context = fitted_logit
+    result = rgr(
+        context["X_test"],
+        context["model"],
+        ["income"],
+        yhat=context["yhat"],
+        kind="gaussian",
+        magnitude=0.6,
+        n_repeats=1,
+        random_state=5,
+        ci=True,
+    )[0]
+    assert "draws" not in result.estimate.method
+
+    # Reproduce the perturbed scores the same way rgr does, and check the
+    # interval against rga_ci on them directly.
+    master = np.random.default_rng(5)
+    seed = master.integers(0, 2**63 - 1, size=1)[0]
+    perturbed = perturb(
+        context["X_test"],
+        "income",
+        0.6,
+        kind="gaussian",
+        random_state=np.random.default_rng(seed),
+    )
+    scores = context["model"].predict_proba(perturbed)[:, 1]
+    direct = rga_ci(context["yhat"], scores, method="jackknife")
+    assert result.estimate.standard_error == pytest.approx(direct.standard_error)
+    assert result.estimate.ci_low == pytest.approx(direct.ci_low)
+    assert result.estimate.ci_high == pytest.approx(direct.ci_high)
 
 
 def test_tailswap_ignores_repeats_because_it_is_deterministic(fitted_logit):

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "safeaipackage-rgbox"
-version = "1.0.2"
+version = "1.0.3"
 description = "Rank Graduation Box (S.A.F.E. AI) metrics with statistical inference - a hardened fork of safeaipackage"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -83,8 +83,14 @@ Paper = "https://doi.org/10.1016/j.eswa.2024.125239"
 packages = ["src/rgbox", "src/safeaipackage"]
 
 [tool.hatch.build.targets.sdist]
+# examples/ is deliberately NOT here. NOTICE.md identifies examples/ and
+# examples/employee.xlsx as verbatim upstream material carrying no licence, and
+# an sdist is a redistribution: shipping it would turn a repository-level
+# provenance question into an actual unlicensed redistribution on PyPI. The
+# wheel only ever contained src/, so it was already clean; this makes the sdist
+# match. Add examples/ back once the upstream licence is settled.
 include = [
-    "src/", "tests/", "benchmarks/", "docs/", "examples/",
+    "src/", "tests/", "benchmarks/", "docs/",
     "README.md", "LICENSE", "NOTICE.md", "MIGRATION.md", "CHANGELOG.md",
 ]
 

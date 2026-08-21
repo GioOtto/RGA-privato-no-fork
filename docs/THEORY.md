@@ -617,6 +617,35 @@ Things this fork deliberately does not settle:
 * **Inference for RGE and AURGR.** The intervals reported for RGE reflect
   evaluation-set sampling only, with the model held fixed. Uncertainty from
   *retraining* (the `"retrain"` path) is a different and larger quantity.
+* **Coverage of the multi-draw RGR interval.** `rgr(n_repeats=m, ci=True)`
+  reports the mean of $m$ perturbation draws with the interval
+  $\sqrt{\widehat{\mathrm{Var}}_S(\bar\theta \mid P_{1..m}) + B/m}$, the
+  first term obtained by averaging the per-draw influence values (or delete-one
+  values, or bootstrap replicates under shared weights) before taking their
+  spread. That is the correct linearisation of the statistic actually reported
+  — the influence function of an average is the average of the influence
+  functions — and unlike the previous $`\mathrm{mean}_j\,\mathrm{SE}_j^2`$
+  it does shrink as $m$ grows. It is nevertheless **conservative by a factor
+  that has not been characterised**. Measured on a Gaussian design at
+  $n = 300$, against the empirical variance of the reported estimate over
+  1500–4000 replications:
+
+  | $m$ | true Var | $`\mathrm{mean}_j\,\mathrm{SE}_j^2`$ | $\mathrm{var}(\overline{\mathrm{IF}})/n$ |
+  |---:|---:|---:|---:|
+  | 1 | 1.08e-04 | 1.39e-04 | 1.39e-04 |
+  | 4 | 2.47e-05 | 1.40e-04 | 6.44e-05 |
+  | 16 | 6.72e-06 | 1.40e-04 | 4.55e-05 |
+  | 64 | 2.17e-06 | 1.41e-04 | 4.08e-05 |
+
+  The averaged linearisation plateaus near 4e-5 where the empirical sampling
+  floor is nearer 1e-6, because $\mu(S) = \mathbb{E}_P[\mathrm{RGR} \mid S]$ is
+  a far smoother functional of the sample than any single draw and the
+  influence functions across draws do not decorrelate the way the average
+  assumes. A derivation that identifies $\mathrm{Var}_S(\mu(S))$ directly
+  — or a nested bootstrap over both the sample and the perturbation — is
+  unfinished work. Until it exists, read a multi-draw RGR interval as an
+  **upper bound** on the uncertainty. The default `n_repeats=1` interval is an
+  ordinary RGA interval and is covered by the simulations above.
 * **A search-aware interval for the worst cohort.** `worst_cohort` reports a
   family-wise p-value that accounts for the search, and a per-cohort interval
   that does not. A selection-adjusted *interval* — the analogue of post-

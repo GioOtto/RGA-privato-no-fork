@@ -47,6 +47,19 @@ def test_requirements_matches_the_dev_extra():
     assert _requirements() == expected
 
 
+def test_the_sdist_does_not_redistribute_the_unlicensed_examples():
+    """An sdist is a redistribution, and `examples/` is not ours to redistribute.
+
+    NOTICE.md identifies `examples/` and `examples/employee.xlsx` as verbatim
+    upstream material carrying no licence. The wheel only ever contained
+    `src/`, so it was clean; the sdist listed `examples/` and would have turned
+    a repository-level provenance question into an actual unlicensed
+    redistribution the moment anything was uploaded to PyPI.
+    """
+    include = _pyproject()["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
+    assert not any("examples" in entry for entry in include), include
+
+
 def test_the_declared_version_is_the_one_the_package_reports():
     """Three places said different things.
 

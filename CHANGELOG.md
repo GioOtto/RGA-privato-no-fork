@@ -4,6 +4,112 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning restarts at 1.0.0 for the fork; upstream's last release was 0.8.3
 (14 May 2025).
 
+## [1.0.3]
+
+Six defects found re-auditing `af4b676`. Two of them were introduced or left
+behind by the 1.0.2 fixes themselves, which is the useful lesson of this round:
+a fix that drops a validation call inherits responsibility for whatever that
+call was checking.
+
+Regression tests are in `tests/test_audit_af4b676.py` (plus one in
+`test_packaging.py`); 10 of the 15 fail on `af4b676`, the rest being guards
+that the fixes changed nothing they should not have.
+
+### Fixed — statistics
+
+- **The multi-draw RGR interval did not narrow as draws were added.** 1.0.2
+  replaced Rubin's rules with `W + B/m` and identified `W = mean_j SE_j**2` as
+  the sampling variance of the mean. It is not. `SE_j` is the sampling variance
+  of a *single* draw, and under the ANOVA decomposition `g(S, P) = mu + a(S) +
+  b(P) + c(S, P)` it equals `Var(a) + E_P Var_S(c)` — the sample effect **plus
+  the entire sample-by-perturbation interaction**. Averaging the `SE_j` removes
+  the interaction from the estimand but not from the estimate, so `W` is
+  constant in `m`. Measured on a Gaussian design at `n = 300` against the
+  empirical variance of the reported figure, over 1500–4000 replications per
+  point:
+
+  | m | true Var | `mean_j SE_j²` | `var(IF_bar)/n` |
+  |---:|---:|---:|---:|
+  | 1 | 1.08e-04 | 1.39e-04 | 1.39e-04 |
+  | 4 | 2.47e-05 | 1.40e-04 | 6.44e-05 |
+  | 16 | 6.72e-06 | 1.40e-04 | 4.55e-05 |
+  | 64 | 2.17e-06 | 1.41e-04 | 4.08e-05 |
+
+  The true variance falls ~50× from `m = 1` to `m = 64`; `W` is flat to three
+  digits. The fix is to linearise **the statistic that is actually reported**:
+  the influence function of an average is the average of the influence
+  functions, and the same holds for jackknife delete-one values and for
+  bootstrap replicates under shared weights. `_pool_across_draws` now averages
+  the per-draw value vectors element-wise *first* and takes the spread of that,
+  then adds `B/m`. `_draw_values` supplies the vectors, and the bootstrap
+  branch is given one fixed seed for every draw so the multinomial weights are
+  identical across draws — passing `random_state` through advanced a live
+  `Generator` per draw, under which averaging replicates is a bootstrap
+  distribution of nothing.
+
+  `m == 1` is arithmetically unchanged and is now pinned against `rga_ci` on
+  the same perturbed scores.
+
+  **This is an improvement, not a closure.** The averaged linearisation still
+  plateaus around 4e-5 where the empirical sampling floor is nearer 1e-6,
+  because `E_P[RGR | S]` is a far smoother functional of the sample than any
+  single draw. The intervals are conservative by an uncharacterised factor and
+  their coverage is *not* simulation-validated the way the RGA intervals are.
+  `docs/THEORY.md` records this as an open question and both the README and the
+  docstring now say to read them as an upper bound. The default `n_repeats=1`
+  interval is an ordinary RGA interval and is unaffected.
+
+### Fixed — API contract
+
+- **`rga_ovr` stopped rejecting missing labels.** 1.0.2 let it take non-numeric
+  class labels by replacing `as_1d_float(y)` with `np.asarray(y)`, and dropped
+  that function's missing-value check along with its ordering requirement. With
+  `y = ["a", "b", None, "c"]` the `None` row is 0 in every one-vs-rest
+  indicator, so it counts as a negative for every class at once: measured
+  `rga = 1.0000`, `n = 4`, three rows classified, no exception. `y` now goes
+  through `as_group_labels` — the same policy the fairness and segment tables
+  use, and for the same reason.
+- **`classes` was checked only for length.** A list omitting an observed level
+  (`classes=["a","b","d"]` on a target holding `"c"`) scored happily, with the
+  `"c"` rows silently becoming a negative in every one-vs-rest problem; a list
+  repeating a class produced a number for an ambiguous column mapping. Both now
+  raise. The default is still `np.unique`, which orders numerically —
+  `sorted(key=repr)` would put 10.0 before 2.0 and transpose two columns of
+  `proba`.
+- **Duplicate column labels of mixed type raised `TypeError` from inside the
+  error path.** pandas allows a frame to mix label types, so
+  `variables=["x", 1, "x", 1]` is a legal duplicate list, and
+  `sorted({"x", 1})` raises `'<' not supported between instances of 'str' and
+  'int'` — replacing the `InputError` that was meant to name the duplicates
+  with an exception naming neither them nor the argument. `sorted(key=repr)`,
+  as the set branch a few lines above already did.
+- **Unhashable group labels raised `TypeError` from an internal helper.** A
+  `pandas.Series` of lists is one-dimensional and carries no missing values, so
+  it passed `as_group_labels` and died in `distinct_levels` on
+  `unhashable type: 'list'`. `as_group_labels` now rejects it by name, via the
+  single `dict.fromkeys` build `distinct_levels` performs anyway, so ordinary
+  string columns pay nothing.
+
+### Fixed — packaging and documentation
+
+- **The sdist would have redistributed the unlicensed upstream material.**
+  `NOTICE.md` identifies `examples/` and `examples/employee.xlsx` as verbatim
+  upstream material with no licence, and the sdist `include` listed
+  `examples/`. The wheel only ever contained `src/`, so it was already clean;
+  the sdist is now too. This does not resolve the licensing question for the
+  Git repository — it stops an upload from turning that question into an actual
+  unlicensed redistribution. `test_packaging.py` pins it.
+- **The README still described the RGR pooling as Rubin's rules**, complete
+  with `T = W + (1 + 1/m)·B`, one release after the code stopped doing that and
+  the changelog said so. Three sources, two answers. Corrected, with the
+  conservativeness caveat added.
+- **The `hatchling` note in the 1.0.2 changelog was wrong about caps.** An
+  upper bound does not cause a break at every backend release; it refuses those
+  releases. The real objections are that the constraint goes stale silently and
+  that it binds anyone building the sdist themselves, which makes this an item
+  about the *release build environment* rather than about the package's
+  dependency specification. Reworded.
+
 ## [1.0.2]
 
 Fourteen defects found auditing `3b20cdf`, verified independently against the
@@ -164,11 +270,15 @@ not have.
   documented in `NOTICE.md`, and resolving it needs a licence from the upstream
   authors or a clean-room split of the repository — a decision, not a code
   change.
-- **`hatchling>=1.21` keeps its open upper bound.** Capping a build backend
-  trades a rare forward-compatibility break for a guaranteed one at every
-  backend release; the CI job that caught the last such break is the right
-  mechanism. A release constraints file remains the better fix and is not done
-  here.
+- **`hatchling>=1.21` keeps its open upper bound.** An upper bound would not
+  break anything by itself — it would refuse the capped releases — but it
+  shifts forward-compatibility risk into the maintenance of a constraint that
+  goes stale silently, and it imposes the maintainer's choice on anyone
+  building the sdist themselves. Reproducible release builds are the job of a
+  constrained *build environment* for the release artefacts, not of the
+  package's dependency specification. That constraints file is not written
+  here, so this remains an open item about the release pipeline rather than
+  about the package.
 
 ## [1.0.1]
 
